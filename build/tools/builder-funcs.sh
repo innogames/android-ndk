@@ -137,7 +137,7 @@ builder_set_binprefix_llvm ()
     _BUILD_BINPREFIX=$1
     _BUILD_CC=${1}clang
     _BUILD_CXX=${1}clang++
-    _BUILD_AR=${2}ar
+    _BUILD_AR=${1}llvm-ar
 }
 
 builder_set_builddir ()
