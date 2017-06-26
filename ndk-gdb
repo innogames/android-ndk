@@ -682,17 +682,15 @@ adb_var_shell2 GDBSERVER_RESULT ls $DEVICE_GDBSERVER
 if [ $? != 0 ]; then
 
     # Figure out what's the target-arch and find gdbserver in prebuilt.
-    TARGET_ARCH=none
+    TARGET_ARCH=$COMPAT_ABI
 
-    for ANDROID_ARCH in $ANDROID_NDK_ROOT/prebuilt/android-*; do
-        ANDROID_ARCH=${ANDROID_ARCH#$ANDROID_NDK_ROOT/prebuilt/android-}
-        if [ "$COMPAT_ABI" = "$ANDROID_ARCH" ]; then
-            TARGET_ARCH=$ANDROID_ARCH
-            break;
-        fi
-    done
+    if [[ $TARGET_ARCH == armeabi* ]]; then
+        TARGET_ARCH="arm"
+    elif [[ $TARGET_ARCH == "arm64-v8a" ]]; then
+        TARGET_ARCH="arm64"
+    fi
 
-    if [ $TARGET_ARCH != "none" ]; then
+    if [ -d ${ANDROID_NDK_ROOT}/prebuilt/android-${TARGET_ARCH} ]; then
         DEVICE_GDBSERVER=/data/local/tmp/gdbserver
 
         adb shell mkdir -p /data/local/tmp
