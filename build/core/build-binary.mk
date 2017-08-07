@@ -443,12 +443,29 @@ ifneq (,$(LOCAL_PCH))
     # Build PCH
     $(call compile-cpp-source,$(LOCAL_PCH),$(LOCAL_BUILT_PCH).gch)
 
-    # Filter obj files that are dependent on the PCH (only those without tags)
-    ifeq (true,$(LOCAL_ARM_NEON))
-        TAGS_TO_FILTER=arm
-    else
-        TAGS_TO_FILTER=arm neon
+    # The PCH must be compiled the same way as the sources (thumb vs arm, neon
+    # vs non-neon must match). This means that we'd have to generate a PCH for
+    # each combination of foo.c.arm and foo.c.neon (do we allow
+    # foo.c.arm.neon?).
+    #
+    # Since files with those source tags should be the minority, precompiling
+    # that header might be a net loss compared to just using it normally. As
+    # such, we only use the PCH for the default compilation mode for the module.
+    #
+    # See https://github.com/android-ndk/ndk/issues/14
+    TAGS_TO_FILTER :=
+
+    # If neon is off, strip out .neon files.
+    ifneq (true,$(LOCAL_ARM_NEON))
+        TAGS_TO_FILTER += neon
     endif
+
+    # If we're building thumb, strip out .arm files.
+    ifneq (arm,$(LOCAL_ARM_MODE))
+        TAGS_TO_FILTER += arm
+    endif
+
+    # There is no .thumb. No need to filter them out if we're building ARM.
 
     allowed_src := $(foreach src,$(filter $(all_cpp_patterns),$(LOCAL_SRC_FILES)),\
         $(if $(filter $(TAGS_TO_FILTER),$(LOCAL_SRC_FILES_TAGS.$(src))),,$(src))\
