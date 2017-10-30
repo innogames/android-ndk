@@ -31,16 +31,26 @@ installed_prefix ()
     echo $RESULT
 }
 
-prefix_build="/tmp/ndk-User/buildhost/install/prebuilt/darwin-x86_64"
+prefix_build="/Volumes/Android/buildbot/src/android/ndk-r12-release/out/build/buildhost/darwin-x86_64/install/host-tools"
 prefix_real=$(installed_prefix "$0")
 
-# Use sed to fix paths from their built to locations to their installed to locations.
-prefix=$(echo "$prefix_build" | sed "s#$prefix_build#$prefix_real#")
 exec_prefix_build="${prefix}"
-exec_prefix=$(echo "$exec_prefix_build" | sed "s#$exec_prefix_build#$prefix_real#")
-includedir=$(echo "${prefix}/include" | sed "s#$prefix_build#$prefix_real#")
-libdir=$(echo "${exec_prefix}/lib" | sed "s#$prefix_build#$prefix_real#")
-CFLAGS=$(echo "-O2 -Os -fomit-frame-pointer -s" | sed "s#$prefix_build#$prefix_real#")
+exec_prefix_real="$prefix_real"
+
+# Use sed to fix paths from their built to locations to their installed to locations.
+
+# The ${prefix}/include and ${exec_prefix}/lib macros can be '$prefix/include' and the like, so we
+# need to avoid replacing the prefix multiple times.
+prefix="$prefix_build"
+exec_prefix="$exec_prefix_build"
+
+includedir=$(echo "${prefix}/include" | sed "s#^$prefix_build#$prefix_real#")
+libdir=$(echo "${exec_prefix}/lib" | sed "s#^$prefix_build#$prefix_real#")
+
+prefix="$prefix_real"
+exec_prefix="$exec_prefix_real"
+
+CFLAGS="-O2 -Os -fomit-frame-pointer -s"
 VERSION="2.7"
 LIBM=""
 LIBC=""
@@ -50,7 +60,7 @@ ABIFLAGS="@ABIFLAGS@"
 if [ "$ABIFLAGS" = "@ABIFLAGS@" ] ; then
     ABIFLAGS=
 fi
-LIBS="-ldl  -framework CoreFoundation $SYSLIBS -lpython${VERSION}${ABIFLAGS}"
+LIBS="-lpython${VERSION}${ABIFLAGS} -ldl  -framework CoreFoundation $SYSLIBS"
 BASECFLAGS=" -fno-strict-aliasing"
 LDLIBRARY="libpython${VERSION}.a"
 LINKFORSHARED="-u _PyMac_Error"
