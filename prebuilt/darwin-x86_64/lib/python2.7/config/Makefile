@@ -26,11 +26,11 @@ MODLIBS=        $(LOCALMODLIBS) $(BASEMODLIBS)
 
 # === Variables set by configure
 VERSION=	2.7
-srcdir=		/s/ndk-toolchain/src/python/Python-2.7.5
-VPATH=		/s/ndk-toolchain/src/python/Python-2.7.5
-MSYSVPATH=	/s/ndk-toolchain/src/python/Python-2.7.5
-abs_srcdir=	/s/ndk-toolchain/src/python/Python-2.7.5
-abs_builddir=	/tmp/ndk-User/buildhost/build-python-darwin-x86_64-2.7.5
+srcdir=		/Volumes/Android/buildbot/src/android/ndk-r12-release/toolchain/python/Python-2.7.5
+VPATH=		/Volumes/Android/buildbot/src/android/ndk-r12-release/toolchain/python/Python-2.7.5
+MSYSVPATH=	/Volumes/Android/buildbot/src/android/ndk-r12-release/toolchain/python/Python-2.7.5
+abs_srcdir=	/Volumes/Android/buildbot/src/android/ndk-r12-release/toolchain/python/Python-2.7.5
+abs_builddir=	/Volumes/Android/buildbot/src/android/ndk-r12-release/out/build/buildhost/build-python-darwin-x86_64-2.7.5
 build=		x86_64-apple-darwin
 host=		x86_64-apple-darwin
 
@@ -54,7 +54,7 @@ SHELL=		/bin/sh
 LN=		ln
 
 # Portable install script (configure doesn't always guess right)
-INSTALL=	/opt/local/bin/ginstall -c
+INSTALL=	/usr/bin/install -c
 INSTALL_PROGRAM=${INSTALL}
 INSTALL_SCRIPT= ${INSTALL}
 INSTALL_DATA=	${INSTALL} -m 644
@@ -63,7 +63,7 @@ INSTALL_DATA=	${INSTALL} -m 644
 # Also, making them read-only seems to be a good idea...
 INSTALL_SHARED= ${INSTALL} -m 555
 
-MKDIR_P=	/opt/local/bin/gmkdir -p
+MKDIR_P=	/Volumes/Android/buildbot/src/android/ndk-r12-release/toolchain/python/Python-2.7.5/install-sh -c -d
 
 MAKESETUP=      $(srcdir)/Modules/makesetup
 
@@ -95,7 +95,7 @@ MACHDEP=	darwin
 MULTIARCH=	
 
 # Install prefix for architecture-independent files
-prefix=		/tmp/ndk-User/buildhost/install/prebuilt/darwin-x86_64
+prefix=		/Volumes/Android/buildbot/src/android/ndk-r12-release/out/build/buildhost/darwin-x86_64/install/host-tools
 
 # Install prefix for architecture-dependent files
 exec_prefix=	${prefix}
@@ -138,7 +138,7 @@ PYTHONFRAMEWORKINSTALLDIR=
 # Deployment target selected during configure, to be checked
 # by distutils. The export statement is needed to ensure that the
 # deployment target is active during build.
-MACOSX_DEPLOYMENT_TARGET=10.4
+MACOSX_DEPLOYMENT_TARGET=10.8
 export MACOSX_DEPLOYMENT_TARGET
 
 # Options to enable prebinding (for fast startup prior to Mac OS X 10.3)
@@ -154,7 +154,7 @@ EXEMODE=	755
 FILEMODE=	644
 
 # configure script arguments
-CONFIG_ARGS=	 '--prefix=/tmp/ndk-User/buildhost/install/prebuilt/darwin-x86_64' '--build=x86_64-apple-darwin' '--host=x86_64-apple-darwin' '--with-build-sysroot' '--disable-ipv6' 'build_alias=x86_64-apple-darwin' 'host_alias=x86_64-apple-darwin' 'CC=x86_64-apple-darwin-gcc' 'CFLAGS=-O2 -Os -fomit-frame-pointer -s' 'LDFLAGS='
+CONFIG_ARGS=	 '--prefix=/Volumes/Android/buildbot/src/android/ndk-r12-release/out/build/buildhost/darwin-x86_64/install/host-tools' '--build=x86_64-apple-darwin' '--host=x86_64-apple-darwin' '--with-build-sysroot' '--disable-ipv6' 'build_alias=x86_64-apple-darwin' 'host_alias=x86_64-apple-darwin' 'CC=x86_64-apple-darwin-gcc' 'CFLAGS=-O2 -Os -fomit-frame-pointer -s' 'LDFLAGS='
 
 
 # Subdirectories with code
@@ -219,7 +219,6 @@ SITEPATH=
 DESTPATH=
 MACHDESTLIB=$(BINLIBDEST)
 DESTLIB=$(LIBDEST)
-
 
 
 ##########################################################################
@@ -541,7 +540,7 @@ $(PYTHONFRAMEWORKDIR)/Versions/$(VERSION)/$(PYTHONFRAMEWORK): \
 # for a shared core library; otherwise, this rule is a noop.
 $(DLLLIBRARY) libpython$(VERSION).dll.a: $(LIBRARY_OBJS)
 	if test -n "$(DLLLIBRARY)"; then \
-		$(LDSHARED) -Wl,--out-implib=$@ -o $(DLLLIBRARY) $^ \
+		$(LDSHARED) -Wl,--out-implib=$@ -o $(DLLLIBRARY) -static-libgcc $^ \
 			$(LIBS) $(MODLIBS) $(SYSLIBS) $(LDLAST); \
 	else true; \
 	fi

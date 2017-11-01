@@ -1,4 +1,4 @@
-/* Generated automatically from /s/ndk-toolchain/src/python/Python-2.7.5/Modules/config.c.in by makesetup. */
+/* Generated automatically from /Volumes/Android/buildbot/src/android/ndk-r12-release/toolchain/python/Python-2.7.5/Modules/config.c.in by makesetup. */
 /* -*- C -*- ***********************************************
 Copyright (c) 2000, BeOpen.com.
 Copyright (c) 1995-2000, Corporation for National Research Initiatives.
@@ -33,7 +33,6 @@ extern void init_weakref(void);
 extern void initzipimport(void);
 extern void init_symtable(void);
 extern void initxxsubtype(void);
-
 /* -- ADDMODULE MARKER 1 -- */
 
 extern void PyMarshal_Init(void);
@@ -44,17 +43,16 @@ extern void _PyWarnings_Init(void);
 
 struct _inittab _PyImport_Inittab[] = {
 
-	{"posix", initposix},
-	{"thread", initthread},
-	{"signal", initsignal},
-	{"errno", initerrno},
-	{"_sre", init_sre},
-	{"_codecs", init_codecs},
-	{"_weakref", init_weakref},
-	{"zipimport", initzipimport},
-	{"_symtable", init_symtable},
-	{"xxsubtype", initxxsubtype},
-
+{"posix", initposix},
+{"thread", initthread},
+{"signal", initsignal},
+{"errno", initerrno},
+{"_sre", init_sre},
+{"_codecs", init_codecs},
+{"_weakref", init_weakref},
+{"zipimport", initzipimport},
+{"_symtable", init_symtable},
+{"xxsubtype", initxxsubtype},
 /* -- ADDMODULE MARKER 2 -- */
 
     /* This module lives in marshal.c */

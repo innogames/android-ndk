@@ -61,11 +61,6 @@ extern AndroidCpuFamily android_getCpuFamily(void);
  * supported by the current device's CPU. The exact bit-flags returned
  * depend on the value returned by android_getCpuFamily(). See the
  * documentation for the ANDROID_CPU_*_FEATURE_* flags below for details.
- *
- * NOTE: This will return 0 for the following architectures that don't have
- *       optional features listed at the moment:
- *
- *   ANDROID_CPU_FAMILY_X86_64
  */
 extern uint64_t android_getCpuFeatures(void);
 
@@ -259,12 +254,20 @@ enum {
 };
 
 /* The bit flags corresponding to the output of android_getCpuFeatures()
- * when android_getCpuFamily() returns ANDROID_CPU_FAMILY_X86.
+ * when android_getCpuFamily() returns ANDROID_CPU_FAMILY_X86 or
+ * ANDROID_CPU_FAMILY_X86_64.
  */
 enum {
     ANDROID_CPU_X86_FEATURE_SSSE3  = (1 << 0),
     ANDROID_CPU_X86_FEATURE_POPCNT = (1 << 1),
     ANDROID_CPU_X86_FEATURE_MOVBE  = (1 << 2),
+    ANDROID_CPU_X86_FEATURE_SSE4_1 = (1 << 3),
+    ANDROID_CPU_X86_FEATURE_SSE4_2 = (1 << 4),
+    ANDROID_CPU_X86_FEATURE_AES_NI = (1 << 5),
+    ANDROID_CPU_X86_FEATURE_AVX =    (1 << 6),
+    ANDROID_CPU_X86_FEATURE_RDRAND = (1 << 7),
+    ANDROID_CPU_X86_FEATURE_AVX2 =   (1 << 8),
+    ANDROID_CPU_X86_FEATURE_SHA_NI = (1 << 9),
 };
 
 /* The bit flags corresponding to the output of android_getCpuFeatures()
