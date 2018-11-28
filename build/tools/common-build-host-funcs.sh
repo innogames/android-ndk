@@ -648,7 +648,7 @@ _bh_select_toolchain_for_host ()
 # Setup the build directory, i.e. a directory where all intermediate
 # files will be placed.
 #
-# $1: Build directory. If empty, a random one will be selected.
+# $1: Build directory. Required.
 #
 # $2: Either 'preserve' or 'remove'. Indicates what to do of
 #     existing files in the build directory, if any.
@@ -659,12 +659,10 @@ bh_setup_build_dir ()
 {
     BH_BUILD_DIR="$1"
     if [ -z "$BH_BUILD_DIR" ]; then
-        BH_BUILD_DIR=$TMPDIR/buildhost
+        panic "bh_setup_build_dir received no build directory"
     fi
     mkdir -p "$BH_BUILD_DIR"
     fail_panic "Could not create build directory: $BH_BUILD_DIR"
-
-    setup_default_log_file $BH_BUILD_DIR/build.log
 
     if [ "$_BH_OPTION_FORCE" ]; then
         rm -rf "$BH_BUILD_DIR"/*

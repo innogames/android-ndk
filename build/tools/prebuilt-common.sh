@@ -1148,44 +1148,6 @@ parse_toolchain_name ()
 
     GCC_VERSION=`expr -- "$TOOLCHAIN" : '.*-\([0-9x\.]*\)'`
     log "Using GCC version: $GCC_VERSION"
-
-    # Determine --host value when building gdbserver
-
-    case "$TOOLCHAIN" in
-    arm-*)
-        GDBSERVER_HOST=arm-eabi-linux
-        GDBSERVER_CFLAGS="-fno-short-enums"
-        GDBSERVER_LDFLAGS=
-        ;;
-    aarch64-*)
-        GDBSERVER_HOST=aarch64-eabi-linux
-        GDBSERVER_CFLAGS="-fno-short-enums -DUAPI_HEADERS"
-        GDBSERVER_LDFLAGS=
-        ;;
-    x86-*)
-        GDBSERVER_HOST=i686-linux-android
-        GDBSERVER_CFLAGS=
-        GDBSERVER_LDFLAGS=
-        ;;
-    x86_64-*)
-        GDBSERVER_HOST=x86_64-linux-android
-        GDBSERVER_CFLAGS=-DUAPI_HEADERS
-        GDBSERVER_LDFLAGS=
-        ;;
-    mipsel-*)
-        GDBSERVER_HOST=mipsel-linux-android
-        GDBSERVER_CFLAGS=
-        GDBSERVER_LDFLAGS=
-        ;;
-    mips64el-*)
-        GDBSERVER_HOST=mips64el-linux-android
-        GDBSERVER_CFLAGS=-DUAPI_HEADERS
-        GDBSERVER_LDFLAGS=
-        ;;
-    *)
-        echo "Unknown TOOLCHAIN=$TOOLCHAIN"
-        exit
-    esac
 }
 
 # Return the host "tag" used to identify prebuilt host binaries.
@@ -1331,7 +1293,7 @@ get_llvm_toolchain_binprefix ()
 {
     local NAME DIR BINPREFIX
     local SYSTEM=${1:-$(get_prebuilt_host_tag)}
-    local VERSION=2812033
+    local VERSION=4053586
     SYSTEM=${SYSTEM%_64} # Trim _64 suffix. We only have one LLVM.
     BINPREFIX=$ANDROID_BUILD_TOP/prebuilts/clang/host/$SYSTEM/clang-$VERSION/bin
     echo "$BINPREFIX"
@@ -1343,11 +1305,11 @@ get_llvm_toolchain_binprefix ()
 # $1: Architecture name
 get_default_api_level_for_arch ()
 {
-    # For now, always build the toolchain against API level 9 for 32-bit arch
+    # For now, always build the toolchain against API level 14 for 32-bit arch
     # and API level $FIRST_API64_LEVEL for 64-bit arch
     case $1 in
         *64) echo $FIRST_API64_LEVEL ;;
-        *) echo 9 ;;
+        *) echo 14 ;;
     esac
 }
 
@@ -1530,21 +1492,6 @@ make_repo_prop () {
 }
 
 #
-# The NDK_TMPDIR variable is used to specify a root temporary directory
-# when invoking toolchain build scripts. If it is not defined, we will
-# create one here, and export the value to ensure that any scripts we
-# call after that use the same one.
-#
-if [ -z "$NDK_TMPDIR" ]; then
-    NDK_TMPDIR=$TMPDIR/tmp/build-$$
-    mkdir -p $NDK_TMPDIR
-    if [ $? != 0 ]; then
-        echo "ERROR: Could not create NDK_TMPDIR: $NDK_TMPDIR"
-        exit 1
-    fi
-    export NDK_TMPDIR
-fi
-
 # Define HOST_TAG32, as the 32-bit version of HOST_TAG
 # We do this by replacing an -x86_64 suffix by -x86
 HOST_TAG32=$HOST_TAG

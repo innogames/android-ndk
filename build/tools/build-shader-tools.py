@@ -52,6 +52,7 @@ def main(args):
     source_root = os.path.join(build_support.android_path(), 'external',
                                'shaderc')
     shaderc_shaderc_dir = os.path.join(source_root, 'shaderc')
+    spirv_headers_dir = os.path.join(source_root, 'spirv-headers')
 
     cmake = os.path.join(build_support.android_path(),
                          'prebuilts', 'cmake', build_host_tag, 'bin', 'cmake')
@@ -63,17 +64,16 @@ def main(args):
 
     additional_args = []
     if args.host.startswith("windows"):
-        gtest_cmd = ''
-        mingw_root = os.path.join(build_support.android_path(),
-                                  'prebuilts', 'gcc', build_host_tag, 'host',
-                                  'x86_64-w64-mingw32-4.8')
-        mingw_compilers = os.path.join(mingw_root, 'bin', 'x86_64-w64-mingw32')
+        # Use MinGW to cross compile.
+        # Use the stock MinGW-w64 from Ubuntu.
+        # The prebuilts MinGW GCC 4.8.3 appears to be broken.
         mingw_toolchain = os.path.join(source_root, 'shaderc',
                                        'cmake', 'linux-mingw-toolchain.cmake')
+        # Turn off pthreads support in gtest. Otherwise I get an error in
+        # gtest-port.h for use of type AutoHandle in gtest-port.h without a
+        # definition.
         additional_args = ['-DCMAKE_TOOLCHAIN_FILE=' + mingw_toolchain,
-                           '-DMINGW_SYSROOT=' + mingw_root,
-                           '-DMINGW_COMPILER_PREFIX=' + mingw_compilers,
-                           '-DSHADERC_SKIP_TESTS=ON']
+                           '-Dgtest_disable_pthreads=ON']
         file_extension = '.exe'
         if args.host == "windows64":
             additional_args.extend(
@@ -89,19 +89,30 @@ def main(args):
         except:
             pass
 
-    build_support.merge_license_files(os.path.join(package_src, 'NOTICE'), [
+    # Create the NOTICE file.
+    license_files = [
         os.path.join(shaderc_shaderc_dir, 'LICENSE'),
         os.path.join(shaderc_shaderc_dir,
                      'third_party',
                      'LICENSE.spirv-tools'),
         os.path.join(shaderc_shaderc_dir,
                      'third_party',
-                     'LICENSE.glslang')])
+                     'LICENSE.glslang'),
+    ]
+    # The SPIRV-Headers might not have landed just yet.  Use its
+    # license file if it exists.
+    spirv_headers_license = os.path.join(spirv_headers_dir, 'LICENSE')
+    if os.path.exists(spirv_headers_license):
+        license_files.append(spirv_headers_license)
+
+    build_support.merge_license_files(os.path.join(package_src, 'NOTICE'),
+                                      license_files)
 
     cmake_command = [cmake, '-GNinja', '-DCMAKE_MAKE_PROGRAM=' + ninja,
                      '-DCMAKE_BUILD_TYPE=Release',
                      '-DCMAKE_INSTALL_PREFIX=' + install_dir,
                      '-DSHADERC_THIRD_PARTY_ROOT_DIR=' + source_root,
+                     '-DSPIRV-Headers_SOURCE_DIR=' + spirv_headers_dir,
                      gtest_cmd,
                      shaderc_shaderc_dir]
 
@@ -115,13 +126,26 @@ def main(args):
     files_to_copy = ['glslc' + file_extension,
                      'spirv-as' + file_extension,
                      'spirv-dis' + file_extension,
-                     'spirv-val' + file_extension]
+                     'spirv-val' + file_extension,
+                     'spirv-cfg' + file_extension,
+                     'spirv-opt' + file_extension]
+    scripts_to_copy = ['spirv-lesspipe.sh',]
+    files_to_copy.extend(scripts_to_copy)
+
+    # Test, except on windows.
     if (not args.host.startswith('windows')):
         subprocess.check_call([ctest, '--verbose'], cwd=obj_out)
 
+    # Copy to install tree.
     for src in files_to_copy:
         shutil.copy2(os.path.join(install_dir, 'bin', src),
                      os.path.join(package_src, src))
+    if args.host.startswith('windows'):
+        for src in scripts_to_copy:
+            # Convert line endings on scripts.
+            # Do it in place to preserve executable permissions.
+            subprocess.check_call(['unix2dos', '-o',
+                                   os.path.join(package_src, src)])
 
     build_support.make_package(package_name, package_src, package_dir)
 

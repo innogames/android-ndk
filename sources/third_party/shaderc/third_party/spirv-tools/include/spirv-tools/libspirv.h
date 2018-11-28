@@ -1,28 +1,16 @@
 // Copyright (c) 2015-2016 The Khronos Group Inc.
 //
-// Permission is hereby granted, free of charge, to any person obtaining a
-// copy of this software and/or associated documentation files (the
-// "Materials"), to deal in the Materials without restriction, including
-// without limitation the rights to use, copy, modify, merge, publish,
-// distribute, sublicense, and/or sell copies of the Materials, and to
-// permit persons to whom the Materials are furnished to do so, subject to
-// the following conditions:
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-// The above copyright notice and this permission notice shall be included
-// in all copies or substantial portions of the Materials.
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
-// MODIFICATIONS TO THIS FILE MAY MEAN IT NO LONGER ACCURATELY REFLECTS
-// KHRONOS STANDARDS. THE UNMODIFIED, NORMATIVE VERSIONS OF KHRONOS
-// SPECIFICATIONS AND HEADER INFORMATION ARE LOCATED AT
-//    https://www.khronos.org/registry/
-//
-// THE MATERIALS ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-// EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
-// IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-// CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
-// TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
-// MATERIALS OR THE USE OR OTHER DEALINGS IN THE MATERIALS.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #ifndef SPIRV_TOOLS_LIBSPIRV_H_
 #define SPIRV_TOOLS_LIBSPIRV_H_
@@ -65,8 +53,25 @@ typedef enum spv_result_t {
   SPV_ERROR_INVALID_CFG = -11,
   SPV_ERROR_INVALID_LAYOUT = -12,
   SPV_ERROR_INVALID_CAPABILITY = -13,
+  SPV_ERROR_INVALID_DATA = -14,  // Indicates data rules validation failure.
+  SPV_ERROR_MISSING_EXTENSION = -15,
   SPV_FORCE_32_BIT_ENUM(spv_result_t)
 } spv_result_t;
+
+// Severity levels of messages communicated to the consumer.
+typedef enum spv_message_level_t {
+  SPV_MSG_FATAL,           // Unrecoverable error due to environment.
+                           // Will exit the program immediately. E.g.,
+                           // out of memory.
+  SPV_MSG_INTERNAL_ERROR,  // Unrecoverable error due to SPIRV-Tools
+                           // internals.
+                           // Will exit the program immediately. E.g.,
+                           // unimplemented feature.
+  SPV_MSG_ERROR,           // Normal error due to user input.
+  SPV_MSG_WARNING,         // Warning information.
+  SPV_MSG_INFO,            // General information.
+  SPV_MSG_DEBUG,           // Debug information.
+} spv_message_level_t;
 
 typedef enum spv_endianness_t {
   SPV_ENDIANNESS_LITTLE,
@@ -222,6 +227,10 @@ typedef enum spv_ext_inst_type_t {
   SPV_EXT_INST_TYPE_NONE = 0,
   SPV_EXT_INST_TYPE_GLSL_STD_450,
   SPV_EXT_INST_TYPE_OPENCL_STD,
+  SPV_EXT_INST_TYPE_SPV_AMD_SHADER_EXPLICIT_VERTEX_PARAMETER,
+  SPV_EXT_INST_TYPE_SPV_AMD_SHADER_TRINARY_MINMAX,
+  SPV_EXT_INST_TYPE_SPV_AMD_GCN_SHADER,
+  SPV_EXT_INST_TYPE_SPV_AMD_SHADER_BALLOT,
 
   SPV_FORCE_32_BIT_ENUM(spv_ext_inst_type_t)
 } spv_ext_inst_type_t;
@@ -238,12 +247,27 @@ typedef enum spv_number_kind_t {
   SPV_NUMBER_FLOATING,
 } spv_number_kind_t;
 
+typedef enum spv_text_to_binary_options_t {
+  SPV_TEXT_TO_BINARY_OPTION_NONE = SPV_BIT(0),
+  // Numeric IDs in the binary will have the same values as in the source.
+  // Non-numeric IDs are allocated by filling in the gaps, starting with 1
+  // and going up.
+  SPV_TEXT_TO_BINARY_OPTION_PRESERVE_NUMERIC_IDS = SPV_BIT(1),
+  SPV_FORCE_32_BIT_ENUM(spv_text_to_binary_options_t)
+} spv_text_to_binary_options_t;
+
 typedef enum spv_binary_to_text_options_t {
   SPV_BINARY_TO_TEXT_OPTION_NONE = SPV_BIT(0),
   SPV_BINARY_TO_TEXT_OPTION_PRINT = SPV_BIT(1),
   SPV_BINARY_TO_TEXT_OPTION_COLOR = SPV_BIT(2),
   SPV_BINARY_TO_TEXT_OPTION_INDENT = SPV_BIT(3),
   SPV_BINARY_TO_TEXT_OPTION_SHOW_BYTE_OFFSET = SPV_BIT(4),
+  // Do not output the module header as leading comments in the assembly.
+  SPV_BINARY_TO_TEXT_OPTION_NO_HEADER = SPV_BIT(5),
+  // Use friendly names where possible.  The heuristic may expand over
+  // time, but will use common names for scalar types, and debug names from
+  // OpName instructions.
+  SPV_BINARY_TO_TEXT_OPTION_FRIENDLY_NAMES = SPV_BIT(6),
   SPV_FORCE_32_BIT_ENUM(spv_binary_to_text_options_t)
 } spv_binary_to_text_options_t;
 
@@ -317,6 +341,8 @@ typedef struct spv_diagnostic_t {
 // Its object is used by various translation API functions.
 typedef struct spv_context_t spv_context_t;
 
+typedef struct spv_validator_options_t spv_validator_options_t;
+
 // Type Definitions
 
 typedef spv_const_binary_t* spv_const_binary;
@@ -326,8 +352,20 @@ typedef spv_position_t* spv_position;
 typedef spv_diagnostic_t* spv_diagnostic;
 typedef const spv_context_t* spv_const_context;
 typedef spv_context_t* spv_context;
+typedef spv_validator_options_t* spv_validator_options;
+typedef const spv_validator_options_t* spv_const_validator_options;
 
 // Platform API
+
+// Returns the SPIRV-Tools software version as a null-terminated string.
+// The contents of the underlying storage is valid for the remainder of
+// the process.
+const char* spvSoftwareVersionString();
+// Returns a null-terminated string containing the name of the project,
+// the software version string, and commit details.
+// The contents of the underlying storage is valid for the remainder of
+// the process.
+const char* spvSoftwareVersionDetailsString();
 
 // Certain target environments impose additional restrictions on SPIR-V, so it's
 // often necessary to specify which one applies.  SPV_ENV_UNIVERSAL means
@@ -335,7 +373,29 @@ typedef spv_context_t* spv_context;
 typedef enum {
   SPV_ENV_UNIVERSAL_1_0,  // SPIR-V 1.0 latest revision, no other restrictions.
   SPV_ENV_VULKAN_1_0,     // Vulkan 1.0 latest revision.
+  SPV_ENV_UNIVERSAL_1_1,  // SPIR-V 1.1 latest revision, no other restrictions.
+  SPV_ENV_OPENCL_2_1,     // OpenCL 2.1 latest revision.
+  SPV_ENV_OPENCL_2_2,     // OpenCL 2.2 latest revision.
+  SPV_ENV_OPENGL_4_0,     // OpenGL 4.0 plus GL_ARB_gl_spirv, latest revisions.
+  SPV_ENV_OPENGL_4_1,     // OpenGL 4.1 plus GL_ARB_gl_spirv, latest revisions.
+  SPV_ENV_OPENGL_4_2,     // OpenGL 4.2 plus GL_ARB_gl_spirv, latest revisions.
+  SPV_ENV_OPENGL_4_3,     // OpenGL 4.3 plus GL_ARB_gl_spirv, latest revisions.
+  // There is no variant for OpenGL 4.4.
+  SPV_ENV_OPENGL_4_5,     // OpenGL 4.5 plus GL_ARB_gl_spirv, latest revisions.
+  SPV_ENV_UNIVERSAL_1_2,  // SPIR-V 1.2, latest revision, no other restrictions.
 } spv_target_env;
+
+// SPIR-V Validator can be parameterized with the following Universal Limits.
+typedef enum {
+  spv_validator_limit_max_struct_members,
+  spv_validator_limit_max_struct_depth,
+  spv_validator_limit_max_local_variables,
+  spv_validator_limit_max_global_variables,
+  spv_validator_limit_max_switch_branches,
+  spv_validator_limit_max_function_args,
+  spv_validator_limit_max_control_flow_nesting_depth,
+  spv_validator_limit_max_access_chain_indexes,
+} spv_validator_limit;
 
 // Returns a string describing the given SPIR-V target environment.
 const char* spvTargetEnvDescription(spv_target_env env);
@@ -346,12 +406,35 @@ spv_context spvContextCreate(spv_target_env env);
 // Destroys the given context object.
 void spvContextDestroy(spv_context context);
 
+// Creates a Validator options object with default options. Returns a valid
+// options object. The object remains valid until it is passed into
+// spvValidatorOptionsDestroy.
+spv_validator_options spvValidatorOptionsCreate();
+
+// Destroys the given Validator options object.
+void spvValidatorOptionsDestroy(spv_validator_options options);
+
+// Records the maximum Universal Limit that is considered valid in the given
+// Validator options object. <options> argument must be a valid options object.
+void spvValidatorOptionsSetUniversalLimit(spv_validator_options options,
+                                          spv_validator_limit limit_type,
+                                          uint32_t limit);
+
 // Encodes the given SPIR-V assembly text to its binary representation. The
 // length parameter specifies the number of bytes for text. Encoded binary will
-// be stored into *binary. Any error will be written into *diagnostic.
+// be stored into *binary. Any error will be written into *diagnostic if
+// diagnostic is non-null. The generated binary is independent of the context
+// and may outlive it.
 spv_result_t spvTextToBinary(const spv_const_context context, const char* text,
                              const size_t length, spv_binary* binary,
                              spv_diagnostic* diagnostic);
+
+// Encodes the given SPIR-V assembly text to its binary representation. Same as
+// spvTextToBinary but with options. The options parameter is a bit field of
+// spv_text_to_binary_options_t.
+spv_result_t spvTextToBinaryWithOptions(
+    const spv_const_context context, const char* text, const size_t length,
+    const uint32_t options, spv_binary* binary, spv_diagnostic* diagnostic);
 
 // Frees an allocated text stream. This is a no-op if the text parameter
 // is a null pointer.
@@ -360,7 +443,8 @@ void spvTextDestroy(spv_text text);
 // Decodes the given SPIR-V binary representation to its assembly text. The
 // word_count parameter specifies the number of words for binary. The options
 // parameter is a bit field of spv_binary_to_text_options_t. Decoded text will
-// be stored into *text. Any error will be written into *diagnostic.
+// be stored into *text. Any error will be written into *diagnostic if
+// diagnostic is non-null.
 spv_result_t spvBinaryToText(const spv_const_context context,
                              const uint32_t* binary, const size_t word_count,
                              const uint32_t options, spv_text* text,
@@ -371,10 +455,24 @@ spv_result_t spvBinaryToText(const spv_const_context context,
 void spvBinaryDestroy(spv_binary binary);
 
 // Validates a SPIR-V binary for correctness. Any errors will be written into
-// *diagnostic.
+// *diagnostic if diagnostic is non-null.
 spv_result_t spvValidate(const spv_const_context context,
                          const spv_const_binary binary,
                          spv_diagnostic* diagnostic);
+
+// Validates a SPIR-V binary for correctness. Uses the provided Validator
+// options. Any errors will be written into *diagnostic if diagnostic is
+// non-null.
+spv_result_t spvValidateWithOptions(const spv_const_context context,
+                                    const spv_const_validator_options options,
+                                    const spv_const_binary binary,
+                                    spv_diagnostic* diagnostic);
+
+// Validates a raw SPIR-V binary for correctness. Any errors will be written
+// into *diagnostic if diagnostic is non-null.
+spv_result_t spvValidateBinary(const spv_const_context context,
+                               const uint32_t* words, const size_t num_words,
+                               spv_diagnostic* diagnostic);
 
 // Creates a diagnostic object. The position parameter specifies the location in
 // the text/binary stream. The message parameter, copied into the diagnostic
@@ -416,10 +514,10 @@ typedef spv_result_t (*spv_parsed_instruction_fn_t)(
 // callback once for each instruction in the stream.  The user_data parameter
 // is supplied as context to the callbacks.  Returns SPV_SUCCESS on successful
 // parse where the callbacks always return SPV_SUCCESS.  For an invalid parse,
-// returns a status code other than SPV_SUCCESS and emits a diagnostic.  If a
-// callback returns anything other than SPV_SUCCESS, then that status code
-// is returned, no further callbacks are issued, and no additional diagnostics
-// are emitted.
+// returns a status code other than SPV_SUCCESS, and if diagnostic is non-null
+// also emits a diagnostic.  If a callback returns anything other than
+// SPV_SUCCESS, then that status code is returned, no further callbacks are
+// issued, and no additional diagnostics are emitted.
 spv_result_t spvBinaryParse(const spv_const_context context, void* user_data,
                             const uint32_t* words, const size_t num_words,
                             spv_parsed_header_fn_t parse_header,

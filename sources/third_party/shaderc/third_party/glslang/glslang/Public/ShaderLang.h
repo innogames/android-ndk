@@ -1,10 +1,12 @@
 //
-//Copyright (C) 2002-2005  3Dlabs Inc. Ltd.
-//All rights reserved.
+// Copyright (C) 2002-2005  3Dlabs Inc. Ltd.
+// Copyright (C) 2013-2016 LunarG, Inc.
 //
-//Redistribution and use in source and binary forms, with or without
-//modification, are permitted provided that the following conditions
-//are met:
+// All rights reserved.
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions
+// are met:
 //
 //    Redistributions of source code must retain the above copyright
 //    notice, this list of conditions and the following disclaimer.
@@ -18,24 +20,27 @@
 //    contributors may be used to endorse or promote products derived
 //    from this software without specific prior written permission.
 //
-//THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-//"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-//LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
-//FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
-//COPYRIGHT HOLDERS OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
-//INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
-//BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
-//LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-//CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
-//LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
-//ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-//POSSIBILITY OF SUCH DAMAGE.
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
+// FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
+// COPYRIGHT HOLDERS OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
+// INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
+// BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+// LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+// CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+// LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
+// ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+// POSSIBILITY OF SUCH DAMAGE.
 //
 #ifndef _COMPILER_INTERFACE_INCLUDED_
 #define _COMPILER_INTERFACE_INCLUDED_
 
 #include "../Include/ResourceLimits.h"
 #include "../MachineIndependent/Versions.h"
+
+#include <cstring>
+#include <vector>
 
 #ifdef _WIN32
 #define C_DECL __cdecl
@@ -99,11 +104,50 @@ typedef enum {
 
 namespace glslang {
 
+class TType;
+
 typedef enum {
     EShSourceNone,
     EShSourceGlsl,
     EShSourceHlsl,
-} EShSource;          // if EShLanguage were EShStage, this could be EShLanguage instead
+} EShSource;                  // if EShLanguage were EShStage, this could be EShLanguage instead
+
+typedef enum {
+    EShClientNone,
+    EShClientVulkan,
+    EShClientOpenGL,
+} EShClient;
+
+typedef enum {
+    EShTargetNone,
+    EshTargetSpv,
+} EShTargetLanguage;
+
+struct TInputLanguage {
+    EShSource languageFamily; // redundant information with other input, this one overrides when not EShSourceNone
+    EShLanguage stage;        // redundant information with other input, this one overrides when not EShSourceNone
+    EShClient dialect;
+    int dialectVersion;       // version of client's language definition, not the client (when not EShClientNone)
+};
+
+struct TClient {
+    EShClient client;
+    int version;              // version of client itself (not the client's input dialect)
+};
+
+struct TTarget {
+    EShTargetLanguage language;
+    unsigned int version;     // the version to target, if SPIR-V, defined by "word 1" of the SPIR-V binary header
+};
+
+// All source/client/target versions and settings.
+// Can override previous methods of setting, when items are set here.
+// Expected to grow, as more are added, rather than growing parameter lists.
+struct TEnvironment {
+    TInputLanguage input;     // definition of the input language
+    TClient client;           // what client is the overall compilation being done for?
+    TTarget target;           // what to generate
+};
 
 const char* StageName(EShLanguage);
 
@@ -128,6 +172,14 @@ typedef enum {
 } EShOptimizationLevel;
 
 //
+// Texture and Sampler transformation mode.
+//
+typedef enum {
+    EShTexSampTransKeep,   // keep textures and samplers as is (default)
+    EShTexSampTransUpgradeTextureRemoveSampler,  // change texture w/o embeded sampler into sampled texture and throw away all samplers
+} EShTextureSamplerTransformMode;
+
+//
 // Message choices for what errors and warnings are given.
 //
 enum EShMessages {
@@ -139,6 +191,10 @@ enum EShMessages {
     EShMsgVulkanRules      = (1 << 4),  // issue messages for Vulkan-requirements of GLSL for SPIR-V
     EShMsgOnlyPreprocessor = (1 << 5),  // only print out errors produced by the preprocessor
     EShMsgReadHlsl         = (1 << 6),  // use HLSL parsing rules and semantics
+    EShMsgCascadingErrors  = (1 << 7),  // get cascading errors; risks error-recovery issues, instead of an early exit
+    EShMsgKeepUncalled     = (1 << 8),  // for testing, don't eliminate uncalled functions
+    EShMsgHlslOffsets      = (1 << 9),  // allow block offsets to follow HLSL rules instead of GLSL rules
+    EShMsgDebugInfo        = (1 << 10), // save debug information
 };
 
 //
@@ -157,9 +213,9 @@ typedef struct {
 
 //
 // ShHandle held by but opaque to the driver.  It is allocated,
-// managed, and de-allocated by the compiler/linker. It's contents 
+// managed, and de-allocated by the compiler/linker. It's contents
 // are defined by and used by the compiler and linker.  For example,
-// symbol table information and object code passed from the compiler 
+// symbol table information and object code passed from the compiler
 // to the linker can be stored where ShHandle points.
 //
 // If handle creation fails, 0 will be returned.
@@ -179,7 +235,7 @@ SH_IMPORT_EXPORT void ShDestruct(ShHandle);
 // The return value of ShCompile is boolean, non-zero indicating
 // success.
 //
-// The info-log should be written by ShCompile into 
+// The info-log should be written by ShCompile into
 // ShHandle, so it can answer future queries.
 //
 SH_IMPORT_EXPORT int ShCompile(
@@ -194,14 +250,6 @@ SH_IMPORT_EXPORT int ShCompile(
     bool forwardCompatible = false,      // give errors for use of deprecated features
     EShMessages messages = EShMsgDefault // warnings and errors
     );
-
-SH_IMPORT_EXPORT int ShLink(
-    const ShHandle,               // linker object
-    const ShHandle h[],           // compiler objects to link together
-    const int numHandles,
-    ShHandle uniformMap,          // updated with new uniforms
-    short int** uniformsAccessed,  // returned with indexes of uniforms accessed
-    int* numUniformsAccessed);
 
 SH_IMPORT_EXPORT int ShLinkExt(
     const ShHandle,               // linker object
@@ -222,7 +270,6 @@ SH_IMPORT_EXPORT const char* ShGetInfoLog(const ShHandle);
 SH_IMPORT_EXPORT const void* ShGetExecutable(const ShHandle);
 SH_IMPORT_EXPORT int ShSetVirtualAttributeBindings(const ShHandle, const ShBindingTable*);   // to detect user aliasing
 SH_IMPORT_EXPORT int ShSetFixedAttributeBindings(const ShHandle, const ShBindingTable*);     // to force any physical mappings
-SH_IMPORT_EXPORT int ShGetPhysicalAttributeBindings(const ShHandle, const ShBindingTable**); // for all attributes
 //
 // Tell the linker to never assign a vertex attribute to this list of physical attributes
 //
@@ -244,8 +291,8 @@ SH_IMPORT_EXPORT int ShGetUniformLocation(const ShHandle uniformMap, const char*
 // -----------------------------------
 //
 // Below is a new alternate C++ interface that might potentially replace the above
-// opaque handle-based interface.  
-//    
+// opaque handle-based interface.
+//
 // The below is further designed to handle multiple compilation units per stage, where
 // the intermediate results, including the parse tree, are preserved until link time,
 // rather than the above interface which is designed to have each compilation unit
@@ -298,6 +345,41 @@ public:
         const char* const* s, const int* l, const char* const* names, int n);
     void setPreamble(const char* s) { preamble = s; }
     void setEntryPoint(const char* entryPoint);
+    void setSourceEntryPoint(const char* sourceEntryPointName);
+    void addProcesses(const std::vector<std::string>&);
+    void setShiftSamplerBinding(unsigned int base);
+    void setShiftTextureBinding(unsigned int base);
+    void setShiftImageBinding(unsigned int base);
+    void setShiftUboBinding(unsigned int base);
+    void setShiftUavBinding(unsigned int base);
+    void setShiftCbufferBinding(unsigned int base); // synonym for setShiftUboBinding
+    void setShiftSsboBinding(unsigned int base);
+    void setResourceSetBinding(const std::vector<std::string>& base);
+    void setAutoMapBindings(bool map);
+    void setAutoMapLocations(bool map);
+    void setHlslIoMapping(bool hlslIoMap);
+    void setFlattenUniformArrays(bool flatten);
+    void setNoStorageFormat(bool useUnknownFormat);
+    void setTextureSamplerTransformMode(EShTextureSamplerTransformMode mode);
+
+    // For setting up the environment (initialized in the constructor):
+    void setEnvInput(EShSource lang, EShLanguage envStage, EShClient client, int version)
+    {
+        environment.input.languageFamily = lang;
+        environment.input.stage = envStage;
+        environment.input.dialect = client;
+        environment.input.dialectVersion = version;
+    }
+    void setEnvClient(EShClient client, int version)
+    {
+        environment.client.client = client;
+        environment.client.version = version;
+    }
+    void setEnvTarget(EShTargetLanguage lang, unsigned int version)
+    {
+        environment.target.language = lang;
+        environment.target.version = version;
+    }
 
     // Interface to #include handlers.
     //
@@ -308,7 +390,7 @@ public:
     // 2. Call parse with an Includer.
     //
     // When the Glslang parser encounters an #include directive, it calls
-    // the Includer's include method with the the requested include name
+    // the Includer's include method with the requested include name
     // together with the current string name.  The returned IncludeResult
     // contains the fully resolved name of the included source, together
     // with the source text that should replace the #include directive
@@ -316,78 +398,94 @@ public:
     // release the IncludeResult object.
     class Includer {
     public:
-        typedef enum {
-          EIncludeRelative, // For #include "something"
-          EIncludeStandard  // Reserved. For #include <something>
-        } IncludeType;
-
         // An IncludeResult contains the resolved name and content of a source
         // inclusion.
         struct IncludeResult {
+            IncludeResult(const std::string& headerName, const char* const headerData, const size_t headerLength, void* userData) :
+                headerName(headerName), headerData(headerData), headerLength(headerLength), userData(userData) { }
             // For a successful inclusion, the fully resolved name of the requested
-            // include.  For example, in a filesystem-based includer, full resolution
+            // include.  For example, in a file system-based includer, full resolution
             // should convert a relative path name into an absolute path name.
             // For a failed inclusion, this is an empty string.
-            std::string file_name;
+            const std::string headerName;
             // The content and byte length of the requested inclusion.  The
             // Includer producing this IncludeResult retains ownership of the
             // storage.
-            // For a failed inclusion, the file_data
+            // For a failed inclusion, the header
             // field points to a string containing error details.
-            const char* file_data;
-            const size_t file_length;
+            const char* const headerData;
+            const size_t headerLength;
             // Include resolver's context.
-            void* user_data;
+            void* userData;
+        protected:
+            IncludeResult& operator=(const IncludeResult&);
+            IncludeResult();
         };
 
-        // Resolves an inclusion request by name, type, current source name,
+        // For both include methods below:
+        //
+        // Resolves an inclusion request by name, current source name,
         // and include depth.
         // On success, returns an IncludeResult containing the resolved name
-        // and content of the include.  On failure, returns an IncludeResult
-        // with an empty string for the file_name and error details in the
-        // file_data field.  The Includer retains ownership of the contents
+        // and content of the include.
+        // On failure, returns a nullptr, or an IncludeResult
+        // with an empty string for the headerName and error details in the
+        // header field.
+        // The Includer retains ownership of the contents
         // of the returned IncludeResult value, and those contents must
         // remain valid until the releaseInclude method is called on that
         // IncludeResult object.
-        virtual IncludeResult* include(const char* requested_source,
-                                      IncludeType type,
-                                      const char* requesting_source,
-                                      size_t inclusion_depth) = 0;
+        //
+        // Note "local" vs. "system" is not an "either/or": "local" is an
+        // extra thing to do over "system". Both might get called, as per
+        // the C++ specification.
+
+        // For the "system" or <>-style includes; search the "system" paths.
+        virtual IncludeResult* includeSystem(const char* /*headerName*/,
+                                             const char* /*includerName*/,
+                                             size_t /*inclusionDepth*/) { return nullptr; }
+
+        // For the "local"-only aspect of a "" include. Should not search in the
+        // "system" paths, because on returning a failure, the parser will
+        // call includeSystem() to look in the "system" locations.
+        virtual IncludeResult* includeLocal(const char* /*headerName*/,
+                                            const char* /*includerName*/,
+                                            size_t /*inclusionDepth*/) { return nullptr; }
+
         // Signals that the parser will no longer use the contents of the
         // specified IncludeResult.
-        virtual void releaseInclude(IncludeResult* result) = 0;
+        virtual void releaseInclude(IncludeResult*) = 0;
+        virtual ~Includer() {}
     };
 
-    // Returns an error message for any #include directive.
-    class ForbidInclude : public Includer {
+    // Fail all Includer searches
+    class ForbidIncluder : public Includer {
     public:
-        IncludeResult* include(const char*, IncludeType, const char*, size_t) override
-        {
-            static const char unexpected_include[] =
-                "unexpected include directive";
-            static const IncludeResult unexpectedIncludeResult =
-                {"", unexpected_include, sizeof(unexpected_include) - 1, nullptr};
-            return new IncludeResult(unexpectedIncludeResult);
-        }
-        virtual void releaseInclude(IncludeResult* result) override
-        {
-            delete result;
-        }
+        virtual void releaseInclude(IncludeResult*) override { }
     };
-
-    bool parse(const TBuiltInResource* res, int defaultVersion, EProfile defaultProfile, bool forceDefaultVersionAndProfile,
-               bool forwardCompatible, EShMessages messages)
-    {
-        TShader::ForbidInclude includer;
-        return parse(res, defaultVersion, defaultProfile, forceDefaultVersionAndProfile, forwardCompatible, messages, includer);
-    }
 
     bool parse(const TBuiltInResource*, int defaultVersion, EProfile defaultProfile, bool forceDefaultVersionAndProfile,
                bool forwardCompatible, EShMessages, Includer&);
 
+    bool parse(const TBuiltInResource* res, int defaultVersion, EProfile defaultProfile, bool forceDefaultVersionAndProfile,
+               bool forwardCompatible, EShMessages messages)
+    {
+        TShader::ForbidIncluder includer;
+        return parse(res, defaultVersion, defaultProfile, forceDefaultVersionAndProfile, forwardCompatible, messages, includer);
+    }
+
     // Equivalent to parse() without a default profile and without forcing defaults.
-    // Provided for backwards compatibility.
-    bool parse(const TBuiltInResource*, int defaultVersion, bool forwardCompatible, EShMessages);
+    bool parse(const TBuiltInResource* builtInResources, int defaultVersion, bool forwardCompatible, EShMessages messages)
+    {
+        return parse(builtInResources, defaultVersion, ENoProfile, false, forwardCompatible, messages);
+    }
+
+    bool parse(const TBuiltInResource* builtInResources, int defaultVersion, bool forwardCompatible, EShMessages messages,
+               Includer& includer)
+    {
+        return parse(builtInResources, defaultVersion, ENoProfile, false, forwardCompatible, messages, includer);
+    }
+
     bool preprocess(const TBuiltInResource* builtInResources,
                     int defaultVersion, EProfile defaultProfile, bool forceDefaultVersionAndProfile,
                     bool forwardCompatible, EShMessages message, std::string* outputString,
@@ -419,6 +517,11 @@ protected:
     const char* preamble;
     int numStrings;
 
+    // a function in the source string can be renamed FROM this TO the name given in setEntryPoint.
+    std::string sourceEntryPointName;
+
+    TEnvironment environment;
+
     friend class TProgram;
 
 private:
@@ -426,8 +529,75 @@ private:
 };
 
 class TReflection;
+class TIoMapper;
 
-// Make one TProgram per set of shaders that will get linked together.  Add all 
+// Allows to customize the binding layout after linking.
+// All used uniform variables will invoke at least validateBinding.
+// If validateBinding returned true then the other resolveBinding,
+// resolveSet, and resolveLocation are invoked to resolve the binding
+// and descriptor set index respectively.
+//
+// Invocations happen in a particular order:
+// 1) all shader inputs
+// 2) all shader outputs
+// 3) all uniforms with binding and set already defined
+// 4) all uniforms with binding but no set defined
+// 5) all uniforms with set but no binding defined
+// 6) all uniforms with no binding and no set defined
+//
+// mapIO will use this resolver in two phases. The first
+// phase is a notification phase, calling the corresponging
+// notifiy callbacks, this phase ends with a call to endNotifications.
+// Phase two starts directly after the call to endNotifications
+// and calls all other callbacks to validate and to get the
+// bindings, sets, locations, component and color indices. 
+//
+// NOTE: that still limit checks are applied to bindings and sets
+// and may result in an error.
+class TIoMapResolver
+{
+public:
+  virtual ~TIoMapResolver() {}
+
+  // Should return true if the resulting/current binding would be okay.
+  // Basic idea is to do aliasing binding checks with this.
+  virtual bool validateBinding(EShLanguage stage, const char* name, const TType& type, bool is_live) = 0;
+  // Should return a value >= 0 if the current binding should be overridden.
+  // Return -1 if the current binding (including no binding) should be kept.
+  virtual int resolveBinding(EShLanguage stage, const char* name, const TType& type, bool is_live) = 0;
+  // Should return a value >= 0 if the current set should be overridden.
+  // Return -1 if the current set (including no set) should be kept.
+  virtual int resolveSet(EShLanguage stage, const char* name, const TType& type, bool is_live) = 0;
+  // Should return a value >= 0 if the current location should be overridden.
+  // Return -1 if the current location (including no location) should be kept.
+  virtual int resolveUniformLocation(EShLanguage stage, const char* name, const TType& type, bool is_live) = 0;
+  // Should return true if the resulting/current setup would be okay.
+  // Basic idea is to do aliasing checks and reject invalid semantic names.
+  virtual bool validateInOut(EShLanguage stage, const char* name, const TType& type, bool is_live) = 0;
+  // Should return a value >= 0 if the current location should be overridden.
+  // Return -1 if the current location (including no location) should be kept.
+  virtual int resolveInOutLocation(EShLanguage stage, const char* name, const TType& type, bool is_live) = 0;
+  // Should return a value >= 0 if the current component index should be overridden.
+  // Return -1 if the current component index (including no index) should be kept.
+  virtual int resolveInOutComponent(EShLanguage stage, const char* name, const TType& type, bool is_live) = 0;
+  // Should return a value >= 0 if the current color index should be overridden.
+  // Return -1 if the current color index (including no index) should be kept.
+  virtual int resolveInOutIndex(EShLanguage stage, const char* name, const TType& type, bool is_live) = 0;
+  // Notification of a uniform variable
+  virtual void notifyBinding(EShLanguage stage, const char* name, const TType& type, bool is_live) = 0;
+  // Notification of a in or out variable
+  virtual void notifyInOut(EShLanguage stage, const char* name, const TType& type, bool is_live) = 0;
+  // Called by mapIO when it has finished the notify pass
+  virtual void endNotifications(EShLanguage stage) = 0;
+  // Called by mapIO when it starts its notify pass for the given stage
+  virtual void beginNotifications(EShLanguage stage) = 0;
+  // Called by mipIO when it starts its resolve pass for the given stage
+  virtual void beginResolve(EShLanguage stage) = 0;
+  // Called by mapIO when it has finished the resolve pass
+  virtual void endResolve(EShLanguage stage) = 0;
+};
+
+// Make one TProgram per set of shaders that will get linked together.  Add all
 // the shaders that are to be linked together.  After calling shader.parse()
 // for all shaders, call link().
 //
@@ -448,17 +618,32 @@ public:
 
     // Reflection Interface
     bool buildReflection();                          // call first, to do liveness analysis, index mapping, etc.; returns false on failure
-    int getNumLiveUniformVariables();                // can be used for glGetProgramiv(GL_ACTIVE_UNIFORMS)
-    int getNumLiveUniformBlocks();                   // can be used for glGetProgramiv(GL_ACTIVE_UNIFORM_BLOCKS)
-    const char* getUniformName(int index);           // can be used for "name" part of glGetActiveUniform()
-    const char* getUniformBlockName(int blockIndex); // can be used for glGetActiveUniformBlockName()
-    int getUniformBlockSize(int blockIndex);         // can be used for glGetActiveUniformBlockiv(UNIFORM_BLOCK_DATA_SIZE)
-    int getUniformIndex(const char* name);           // can be used for glGetUniformIndices()
-    int getUniformBlockIndex(int index);             // can be used for glGetActiveUniformsiv(GL_UNIFORM_BLOCK_INDEX)
-    int getUniformType(int index);                   // can be used for glGetActiveUniformsiv(GL_UNIFORM_TYPE)
-    int getUniformBufferOffset(int index);           // can be used for glGetActiveUniformsiv(GL_UNIFORM_OFFSET)
-    int getUniformArraySize(int index);              // can be used for glGetActiveUniformsiv(GL_UNIFORM_SIZE)
+    int getNumLiveUniformVariables() const;                // can be used for glGetProgramiv(GL_ACTIVE_UNIFORMS)
+    int getNumLiveUniformBlocks() const;                   // can be used for glGetProgramiv(GL_ACTIVE_UNIFORM_BLOCKS)
+    const char* getUniformName(int index) const;           // can be used for "name" part of glGetActiveUniform()
+    const char* getUniformBlockName(int blockIndex) const; // can be used for glGetActiveUniformBlockName()
+    int getUniformBlockSize(int blockIndex) const;         // can be used for glGetActiveUniformBlockiv(UNIFORM_BLOCK_DATA_SIZE)
+    int getUniformIndex(const char* name) const;           // can be used for glGetUniformIndices()
+    int getUniformBinding(int index) const;                // returns the binding number
+    int getUniformBlockIndex(int index) const;             // can be used for glGetActiveUniformsiv(GL_UNIFORM_BLOCK_INDEX)
+    int getUniformBlockCounterIndex(int index) const;      // returns block index of associated counter.
+    int getUniformType(int index) const;                   // can be used for glGetActiveUniformsiv(GL_UNIFORM_TYPE)
+    int getUniformBufferOffset(int index) const;           // can be used for glGetActiveUniformsiv(GL_UNIFORM_OFFSET)
+    int getUniformArraySize(int index) const;              // can be used for glGetActiveUniformsiv(GL_UNIFORM_SIZE)
+    int getNumLiveAttributes() const;                      // can be used for glGetProgramiv(GL_ACTIVE_ATTRIBUTES)
+    unsigned getLocalSize(int dim) const;                  // return dim'th local size
+    const char *getAttributeName(int index) const;         // can be used for glGetActiveAttrib()
+    int getAttributeType(int index) const;                 // can be used for glGetActiveAttrib()
+    const TType* getUniformTType(int index) const;         // returns a TType*
+    const TType* getUniformBlockTType(int index) const;    // returns a TType*
+    const TType* getAttributeTType(int index) const;       // returns a TType*
+
     void dumpReflection();
+
+    // I/O mapping: apply base offsets and map live unbound variables
+    // If resolver is not provided it uses the previous approach
+    // and respects auto assignment and offsets.
+    bool mapIO(TIoMapResolver* resolver = NULL);
 
 protected:
     bool linkStage(EShLanguage, EShMessages);
@@ -469,9 +654,11 @@ protected:
     bool newedIntermediate[EShLangCount];      // track which intermediate were "new" versus reusing a singleton unit in a stage
     TInfoSink* infoSink;
     TReflection* reflection;
+    TIoMapper* ioMapper;
     bool linked;
 
 private:
+    TProgram(TProgram&);
     TProgram& operator=(TProgram&);
 };
 

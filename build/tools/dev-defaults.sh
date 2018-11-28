@@ -55,7 +55,7 @@ FIRST_GCC64_VERSION=4.9
 DEFAULT_LLVM_GCC32_VERSION=4.9
 DEFAULT_LLVM_GCC64_VERSION=4.9
 
-DEFAULT_BINUTILS_VERSION=2.25
+DEFAULT_BINUTILS_VERSION=2.27
 DEFAULT_GDB_VERSION=7.11
 DEFAULT_MPFR_VERSION=3.1.1
 DEFAULT_GMP_VERSION=5.0.5
@@ -67,7 +67,7 @@ DEFAULT_PYTHON_VERSION=2.7.5
 DEFAULT_PERL_VERSION=5.16.2
 
 # Default platform to build target binaries against.
-DEFAULT_PLATFORM=android-9
+DEFAULT_PLATFORM=android-14
 
 # The list of default CPU architectures we support
 DEFAULT_ARCHS="arm x86 mips arm64 x86_64 mips64"
@@ -88,8 +88,8 @@ DEFAULT_ARCH_TOOLCHAIN_PREFIX_x86=i686-linux-android
 DEFAULT_ARCH_TOOLCHAIN_NAME_x86_64=x86_64
 DEFAULT_ARCH_TOOLCHAIN_PREFIX_x86_64=x86_64-linux-android
 
-DEFAULT_ARCH_TOOLCHAIN_NAME_mips=mipsel-linux-android
-DEFAULT_ARCH_TOOLCHAIN_PREFIX_mips=mipsel-linux-android
+DEFAULT_ARCH_TOOLCHAIN_NAME_mips=mips64el-linux-android
+DEFAULT_ARCH_TOOLCHAIN_PREFIX_mips=mips64el-linux-android
 
 DEFAULT_ARCH_TOOLCHAIN_NAME_mips64=mips64el-linux-android
 DEFAULT_ARCH_TOOLCHAIN_PREFIX_mips64=mips64el-linux-android
@@ -292,7 +292,7 @@ get_default_gdb_version_for_gcc ()
 #
 # $1: toolchain with version number (e.g. 'arm-linux-androideabi-4.8')
 #
-get_default_gdbserver_version_for_gcc ()
+get_default_gdbserver_version ()
 {
     echo "$DEFAULT_GDB_VERSION"
 }

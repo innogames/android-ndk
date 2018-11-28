@@ -15,8 +15,6 @@
 #include "libshaderc_util/compiler.h"
 
 #include <cstdint>
-#include <fstream>
-#include <iostream>
 #include <tuple>
 
 #include "libshaderc_util/format.h"
@@ -24,10 +22,9 @@
 #include "libshaderc_util/message.h"
 #include "libshaderc_util/resources.h"
 #include "libshaderc_util/shader_stage.h"
+#include "libshaderc_util/spirv_tools_wrapper.h"
 #include "libshaderc_util/string_piece.h"
 #include "libshaderc_util/version_profile.h"
-
-#include "spirv-tools/libspirv.h"
 
 #include "SPIRV/GlslangToSpv.h"
 
@@ -68,54 +65,69 @@ std::pair<int, string_piece> DecodeLineDirective(string_piece directive) {
   return std::make_pair(line, directive);
 }
 
-// Writes the message contained in the diagnostic parameter to *dest. Assumes
-// the diagnostic message is reported for a binary location.
-void OutputSpvToolsDiagnostic(spv_diagnostic diagnostic, std::string* dest) {
-  assert(!diagnostic->isTextSource);
-
-  std::ostringstream os;
-  os << diagnostic->position.index << ": " << diagnostic->error;
-  *dest = os.str();
-}
-
-// Disassembles the given binary. Returns SPV_SUCCESS and writes the
-// disassembled text to *text_or_error if successful. Otherwise, writes the
-// error message to *text_or_error.
-spv_result_t DisassembleBinary(const std::vector<uint32_t>& binary,
-                               std::string* text_or_error) {
-  auto spvtools_context = spvContextCreate(SPV_ENV_UNIVERSAL_1_0);
-  spv_text disassembled_text = nullptr;
-  spv_diagnostic spvtools_diagnostic = nullptr;
-
-  spv_result_t result =
-      spvBinaryToText(spvtools_context, binary.data(), binary.size(),
-                      SPV_BINARY_TO_TEXT_OPTION_INDENT, &disassembled_text,
-                      &spvtools_diagnostic);
-  if (result == SPV_SUCCESS) {
-    text_or_error->assign(disassembled_text->str, disassembled_text->length);
-  } else {
-    OutputSpvToolsDiagnostic(spvtools_diagnostic, text_or_error);
+// Returns the Glslang message rules for the given target environment,
+// source language, and whether we want HLSL offset rules.  We assume
+// only valid combinations are used.
+EShMessages GetMessageRules(shaderc_util::Compiler::TargetEnv env,
+                            shaderc_util::Compiler::SourceLanguage lang,
+                            bool hlsl_offsets) {
+  using shaderc_util::Compiler;
+  EShMessages result = EShMsgCascadingErrors;
+  if (lang == Compiler::SourceLanguage::HLSL) {
+    result = static_cast<EShMessages>(result | EShMsgReadHlsl);
   }
-
-  spvDiagnosticDestroy(spvtools_diagnostic);
-  spvTextDestroy(disassembled_text);
-  spvContextDestroy(spvtools_context);
-
+  switch (env) {
+    case Compiler::TargetEnv::OpenGLCompat:
+      break;
+    case Compiler::TargetEnv::OpenGL:
+      result = static_cast<EShMessages>(result | EShMsgSpvRules);
+      break;
+    case Compiler::TargetEnv::Vulkan:
+      result =
+          static_cast<EShMessages>(result | EShMsgSpvRules | EShMsgVulkanRules);
+      break;
+  }
+  if (hlsl_offsets) {
+    result = static_cast<EShMessages>(result | EShMsgHlslOffsets);
+  }
   return result;
 }
 
 }  // anonymous namespace
 
 namespace shaderc_util {
+
+void Compiler::SetLimit(Compiler::Limit limit, int value) {
+  switch (limit) {
+#define RESOURCE(NAME, FIELD, CNAME) \
+  case Limit::NAME:                  \
+    limits_.FIELD = value;           \
+    break;
+#include "libshaderc_util/resources.inc"
+#undef RESOURCE
+  }
+}
+
+int Compiler::GetLimit(Compiler::Limit limit) const {
+  switch (limit) {
+#define RESOURCE(NAME, FIELD, CNAME) \
+  case Limit::NAME:                  \
+    return limits_.FIELD;
+#include "libshaderc_util/resources.inc"
+#undef RESOURCE
+  }
+  return 0;  // Unreachable
+}
+
 std::tuple<bool, std::vector<uint32_t>, size_t> Compiler::Compile(
     const string_piece& input_source_string, EShLanguage forced_shader_stage,
-    const std::string& error_tag,
+    const std::string& error_tag, const char* entry_point_name,
     const std::function<EShLanguage(std::ostream* error_stream,
                                     const string_piece& error_tag)>&
         stage_callback,
     CountingIncluder& includer, OutputType output_type,
     std::ostream* error_stream, size_t* total_warnings, size_t* total_errors,
-    GlslInitializer* initializer) const {
+    GlslangInitializer* initializer) const {
   // Compilation results to be returned:
   // Initialize the result tuple as a failed compilation. In error cases, we
   // should return result_tuple directly without setting its members.
@@ -127,7 +139,7 @@ std::tuple<bool, std::vector<uint32_t>, size_t> Compiler::Compile(
   std::vector<uint32_t>& compilation_output_data = std::get<1>(result_tuple);
   size_t& compilation_output_data_size_in_bytes = std::get<2>(result_tuple);
 
-  auto token = initializer->Acquire(GetMessageRules());
+  auto token = initializer->Acquire();
   EShLanguage used_shader_stage = forced_shader_stage;
   const std::string macro_definitions =
       shaderc_util::format(predefined_macros_, "#define ", " ", "\n");
@@ -196,12 +208,24 @@ std::tuple<bool, std::vector<uint32_t>, size_t> Compiler::Compile(
   shader.setStringsWithLengthsAndNames(&shader_strings, &shader_lengths,
                                        &string_names, 1);
   shader.setPreamble(preamble.c_str());
+  shader.setEntryPoint(entry_point_name);
+  shader.setAutoMapBindings(auto_bind_uniforms_);
+  const auto& bases = auto_binding_base_[static_cast<int>(used_shader_stage)];
+  shader.setShiftImageBinding(bases[static_cast<int>(UniformKind::Image)]);
+  shader.setShiftSamplerBinding(bases[static_cast<int>(UniformKind::Sampler)]);
+  shader.setShiftTextureBinding(bases[static_cast<int>(UniformKind::Texture)]);
+  shader.setShiftUboBinding(bases[static_cast<int>(UniformKind::Buffer)]);
+  shader.setShiftSsboBinding(bases[static_cast<int>(UniformKind::StorageBuffer)]);
+  shader.setShiftUavBinding(bases[static_cast<int>(UniformKind::UnorderedAccessView)]);
+  shader.setHlslIoMapping(hlsl_iomap_);
+  shader.setResourceSetBinding(
+      hlsl_explicit_bindings_[static_cast<int>(used_shader_stage)]);
 
   // TODO(dneto): Generate source-level debug info if requested.
-  bool success =
-      shader.parse(&shaderc_util::kDefaultTBuiltInResource, default_version_,
-                   default_profile_, force_version_profile_,
-                   kNotForwardCompatible, message_rules_, includer);
+  bool success = shader.parse(
+      &limits_, default_version_, default_profile_, force_version_profile_,
+      kNotForwardCompatible,
+      GetMessageRules(target_env_, source_language_, hlsl_offsets_), includer);
 
   success &= PrintFilteredErrors(error_tag, error_stream, warnings_as_errors_,
                                  suppress_warnings_, shader.getInfoLog(),
@@ -210,21 +234,40 @@ std::tuple<bool, std::vector<uint32_t>, size_t> Compiler::Compile(
 
   glslang::TProgram program;
   program.addShader(&shader);
-  success = program.link(EShMsgDefault);
+  success = program.link(EShMsgDefault) && program.mapIO();
   success &= PrintFilteredErrors(error_tag, error_stream, warnings_as_errors_,
                                  suppress_warnings_, program.getInfoLog(),
                                  total_warnings, total_errors);
   if (!success) return result_tuple;
 
   // 'spirv' is an alias for the compilation_output_data. This alias is added
-  // to
-  // serve as an input for the call to DissassemblyBinary.
+  // to serve as an input for the call to DissassemblyBinary.
   std::vector<uint32_t>& spirv = compilation_output_data;
   // Note the call to GlslangToSpv also populates compilation_output_data.
   glslang::GlslangToSpv(*program.getIntermediate(used_shader_stage), spirv);
+
+  // Set the tool field (the top 16-bits) in the generator word to
+  // 'Shaderc over Glslang'.
+  const uint32_t shaderc_generator_word = 13; // From SPIR-V XML Registry
+  const uint32_t generator_word_index = 2; // SPIR-V 2.3: Physical layout
+  assert(spirv.size() > generator_word_index);
+  spirv[generator_word_index] =
+      (spirv[generator_word_index] & 0xffff) | (shaderc_generator_word << 16);
+
+  if (!enabled_opt_passes_.empty()) {
+    std::string opt_errors;
+    if (!SpirvToolsOptimize(target_env_, enabled_opt_passes_, &spirv,
+                            &opt_errors)) {
+      *error_stream << "shaderc: internal error: compilation succeeded but "
+                       "failed to optimize: "
+                    << opt_errors << "\n";
+      return result_tuple;
+    }
+  }
+
   if (output_type == OutputType::SpirvAssemblyText) {
     std::string text_or_error;
-    if (DisassembleBinary(spirv, &text_or_error) != SPV_SUCCESS) {
+    if (!SpirvToolsDisassemble(target_env_, spirv, &text_or_error)) {
       *error_stream << "shaderc: internal error: compilation succeeded but "
                        "failed to disassemble: "
                     << text_or_error << "\n";
@@ -249,9 +292,11 @@ void Compiler::AddMacroDefinition(const char* macro, size_t macro_length,
       definition ? std::string(definition, definition_length) : "";
 }
 
-void Compiler::SetMessageRules(EShMessages rules) { message_rules_ = rules; }
+void Compiler::SetTargetEnv(Compiler::TargetEnv env) { target_env_ = env; }
 
-EShMessages Compiler::GetMessageRules() const { return message_rules_; }
+void Compiler::SetSourceLanguage(Compiler::SourceLanguage lang) {
+  source_language_ = lang;
+}
 
 void Compiler::SetForcedVersionProfile(int version, EProfile profile) {
   default_version_ = version;
@@ -261,7 +306,30 @@ void Compiler::SetForcedVersionProfile(int version, EProfile profile) {
 
 void Compiler::SetWarningsAsErrors() { warnings_as_errors_ = true; }
 
-void Compiler::SetGenerateDebugInfo() { generate_debug_info_ = true; }
+void Compiler::SetGenerateDebugInfo() {
+  generate_debug_info_ = true;
+  for (size_t i = 0; i < enabled_opt_passes_.size(); ++i) {
+    if (enabled_opt_passes_[i] == PassId::kStripDebugInfo) {
+      enabled_opt_passes_[i] = PassId::kNullPass;
+    }
+  }
+}
+
+void Compiler::SetOptimizationLevel(Compiler::OptimizationLevel level) {
+  // Clear previous settings first.
+  enabled_opt_passes_.clear();
+
+  switch (level) {
+    case OptimizationLevel::Size:
+      if (!generate_debug_info_) {
+        enabled_opt_passes_.push_back(PassId::kStripDebugInfo);
+      }
+      enabled_opt_passes_.push_back(PassId::kUnifyConstant);
+      break;
+    default:
+      break;
+  }
+}
 
 void Compiler::SetSuppressWarnings() { suppress_warnings_ = true; }
 
@@ -280,14 +348,14 @@ std::tuple<bool, std::string, std::string> Compiler::PreprocessShader(
   // The preprocessor might be sensitive to the target environment.
   // So combine the existing rules with the just-give-me-preprocessor-output
   // flag.
-  const auto rules =
-      static_cast<EShMessages>(EShMsgOnlyPreprocessor | message_rules_);
+  const auto rules = static_cast<EShMessages>(
+      EShMsgOnlyPreprocessor |
+      GetMessageRules(target_env_, source_language_, hlsl_offsets_));
 
   std::string preprocessed_shader;
   const bool success = shader.preprocess(
-      &shaderc_util::kDefaultTBuiltInResource, default_version_,
-      default_profile_, force_version_profile_, kNotForwardCompatible, rules,
-      &preprocessed_shader, includer);
+      &limits_, default_version_, default_profile_, force_version_profile_,
+      kNotForwardCompatible, rules, &preprocessed_shader, includer);
 
   if (success) {
     return std::make_tuple(true, preprocessed_shader, shader.getInfoLog());

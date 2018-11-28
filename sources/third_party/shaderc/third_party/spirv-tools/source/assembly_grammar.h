@@ -1,35 +1,23 @@
 // Copyright (c) 2015-2016 The Khronos Group Inc.
 //
-// Permission is hereby granted, free of charge, to any person obtaining a
-// copy of this software and/or associated documentation files (the
-// "Materials"), to deal in the Materials without restriction, including
-// without limitation the rights to use, copy, modify, merge, publish,
-// distribute, sublicense, and/or sell copies of the Materials, and to
-// permit persons to whom the Materials are furnished to do so, subject to
-// the following conditions:
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-// The above copyright notice and this permission notice shall be included
-// in all copies or substantial portions of the Materials.
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
-// MODIFICATIONS TO THIS FILE MAY MEAN IT NO LONGER ACCURATELY REFLECTS
-// KHRONOS STANDARDS. THE UNMODIFIED, NORMATIVE VERSIONS OF KHRONOS
-// SPECIFICATIONS AND HEADER INFORMATION ARE LOCATED AT
-//    https://www.khronos.org/registry/
-//
-// THE MATERIALS ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-// EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
-// IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-// CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
-// TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
-// MATERIALS OR THE USE OR OTHER DEALINGS IN THE MATERIALS.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #ifndef LIBSPIRV_ASSEMBLY_GRAMMAR_H_
 #define LIBSPIRV_ASSEMBLY_GRAMMAR_H_
 
 #include "operand.h"
 #include "spirv-tools/libspirv.h"
-#include "spirv/spirv.h"
+#include "spirv/1.2/spirv.h"
 #include "table.h"
 
 namespace libspirv {
@@ -107,17 +95,19 @@ class AssemblyGrammar {
   spv_result_t lookupExtInst(spv_ext_inst_type_t type, uint32_t firstWord,
                              spv_ext_inst_desc* extInst) const;
 
-  // Inserts the operands expected after the given typed mask onto the front
+  // Inserts the operands expected after the given typed mask onto the end
   // of the given pattern.
   //
-  // Each set bit in the mask represents zero or more operand types that should
-  // be prepended onto the pattern. Operands for a less significant bit always
-  // appear before operands for a more significant bit.
+  // Each set bit in the mask represents zero or more operand types that
+  // should be appended onto the pattern. Operands for a less significant
+  // bit must always match before operands for a more significant bit, so
+  // the operands for a less significant bit must appear closer to the end
+  // of the pattern stack.
   //
   // If a set bit is unknown, then we assume it has no operands.
-  void prependOperandTypesForMask(const spv_operand_type_t type,
-                                  const uint32_t mask,
-                                  spv_operand_pattern_t* pattern) const;
+  void pushOperandTypesForMask(const spv_operand_type_t type,
+                               const uint32_t mask,
+                               spv_operand_pattern_t* pattern) const;
 
  private:
   const spv_target_env target_env_;

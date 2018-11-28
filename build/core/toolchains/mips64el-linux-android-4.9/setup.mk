@@ -13,7 +13,7 @@
 # limitations under the License.
 #
 
-# this file is used to prepare the NDK to build with the mips64el gcc-4.9
+# this file is used to prepare the NDK to build mips64 with the mips64el gcc-4.9
 # toolchain any number of source files
 #
 # its purpose is to define (or re-define) templates used to build
@@ -25,15 +25,10 @@
 
 TARGET_CFLAGS := \
     -fpic \
-    -finline-functions \
     -ffunction-sections \
     -funwind-tables \
     -fstack-protector-strong \
     -fmessage-length=0 \
-    -fno-inline-functions-called-once \
-    -fgcse-after-reload \
-    -frerun-cse-after-loop \
-    -frename-registers \
     -no-canonical-prefixes \
 
 # Always enable debug info. We strip binaries when needed.

@@ -1,13 +1,13 @@
 //
-//Copyright (C) 2002-2005  3Dlabs Inc. Ltd.
-//Copyright (C) 2012-2015 LunarG, Inc.
-//Copyright (C) 2015-2016 Google, Inc.
+// Copyright (C) 2002-2005  3Dlabs Inc. Ltd.
+// Copyright (C) 2012-2016 LunarG, Inc.
+// Copyright (C) 2015-2016 Google, Inc.
 //
-//All rights reserved.
+// All rights reserved.
 //
-//Redistribution and use in source and binary forms, with or without
-//modification, are permitted provided that the following conditions
-//are met:
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions
+// are met:
 //
 //    Redistributions of source code must retain the above copyright
 //    notice, this list of conditions and the following disclaimer.
@@ -21,18 +21,18 @@
 //    contributors may be used to endorse or promote products derived
 //    from this software without specific prior written permission.
 //
-//THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-//"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-//LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
-//FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
-//COPYRIGHT HOLDERS OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
-//INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
-//BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
-//LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-//CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
-//LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
-//ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-//POSSIBILITY OF SUCH DAMAGE.
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
+// FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
+// COPYRIGHT HOLDERS OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
+// INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
+// BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+// LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+// CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+// LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
+// ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+// POSSIBILITY OF SUCH DAMAGE.
 //
 
 #ifndef _TYPES_INCLUDED
@@ -42,6 +42,8 @@
 #include "../Include/BaseTypes.h"
 #include "../Public/ShaderLang.h"
 #include "arrays.h"
+
+#include <algorithm>
 
 namespace glslang {
 
@@ -78,12 +80,29 @@ struct TSampler {   // misnomer now; includes images, textures without sampler, 
     bool   combined : 1;  // true means texture is combined with a sampler, false means texture with no sampler
     bool    sampler : 1;  // true means a pure sampler, other fields should be clear()
     bool   external : 1;  // GL_OES_EGL_image_external
+    unsigned int vectorSize : 3;  // vector return type size.
+
+    // Some languages support structures as sample results.  Storing the whole structure in the
+    // TSampler is too large, so there is an index to a separate table.
+    static const unsigned structReturnIndexBits = 4;                        // number of index bits to use.
+    static const unsigned structReturnSlots = (1<<structReturnIndexBits)-1; // number of valid values
+    static const unsigned noReturnStruct = structReturnSlots;               // value if no return struct type.
+
+    // Index into a language specific table of texture return structures.
+    unsigned int structReturnIndex : structReturnIndexBits;
+
+    // Encapsulate getting members' vector sizes packed into the vectorSize bitfield.
+    unsigned int getVectorSize() const { return vectorSize; }
 
     bool isImage()       const { return image && dim != EsdSubpass; }
     bool isSubpass()     const { return dim == EsdSubpass; }
     bool isCombined()    const { return combined; }
     bool isPureSampler() const { return sampler; }
     bool isTexture()     const { return !sampler && !image; }
+    bool isShadow()      const { return shadow; }
+    bool isArrayed()     const { return arrayed; }
+    bool isMultiSample() const { return ms; }
+    bool hasReturnStruct() const { return structReturnIndex != noReturnStruct; }
 
     void clear()
     {
@@ -96,6 +115,10 @@ struct TSampler {   // misnomer now; includes images, textures without sampler, 
         combined = false;
         sampler = false;
         external = false;
+        structReturnIndex = noReturnStruct;
+
+        // by default, returns a single vec4;
+        vectorSize = 4;
     }
 
     // make a combined sampler and texture
@@ -153,15 +176,17 @@ struct TSampler {   // misnomer now; includes images, textures without sampler, 
 
     bool operator==(const TSampler& right) const
     {
-        return type == right.type &&
-                dim == right.dim &&
-            arrayed == right.arrayed &&
-             shadow == right.shadow &&
-                 ms == right.ms &&
-              image == right.image &&
-           combined == right.combined &&
-            sampler == right.sampler &&
-           external == right.external;
+        return      type == right.type &&
+                     dim == right.dim &&
+                 arrayed == right.arrayed &&
+                  shadow == right.shadow &&
+                      ms == right.ms &&
+                   image == right.image &&
+                combined == right.combined &&
+                 sampler == right.sampler &&
+                external == right.external &&
+              vectorSize == right.vectorSize &&
+       structReturnIndex == right.structReturnIndex;            
     }
 
     bool operator!=(const TSampler& right) const
@@ -388,30 +413,51 @@ public:
     {
         precision = EpqNone;
         invariant = false;
+        noContraction = false;
         makeTemporary();
+        declaredBuiltIn = EbvNone;
     }
 
     // drop qualifiers that don't belong in a temporary variable
     void makeTemporary()
     {
-        storage      = EvqTemporary;
-        builtIn      = EbvNone;
+        semanticName = nullptr;
+        storage = EvqTemporary;
+        builtIn = EbvNone;
+        clearInterstage();
+        clearMemory();
+        specConstant = false;
+        clearLayout();
+    }
+
+    void clearInterstage()
+    {
+        clearInterpolation();
+        patch = false;
+        sample = false;
+    }
+
+    void clearInterpolation()
+    {
         centroid     = false;
         smooth       = false;
         flat         = false;
         nopersp      = false;
-        patch        = false;
-        sample       = false;
+#ifdef AMD_EXTENSIONS
+        explicitInterp = false;
+#endif
+    }
+
+    void clearMemory()
+    {
         coherent     = false;
         volatil      = false;
         restrict     = false;
         readonly     = false;
         writeonly    = false;
-        specConstant = false;
-        clearLayout();
     }
 
-    // Drop just the storage qualification, which perhaps should 
+    // Drop just the storage qualification, which perhaps should
     // never be done, as it is fundamentally inconsistent, but need to
     // explore what downstream consumers need.
     // E.g., in a deference, it is an inconsistency between:
@@ -424,14 +470,20 @@ public:
         specConstant = false;
     }
 
+    const char*         semanticName;
     TStorageQualifier   storage   : 6;
     TBuiltInVariable    builtIn   : 8;
+    TBuiltInVariable    declaredBuiltIn : 8;
     TPrecisionQualifier precision : 3;
-    bool invariant    : 1;
+    bool invariant    : 1; // require canonical treatment for cross-shader invariance
+    bool noContraction: 1; // prevent contraction and reassociation, e.g., for 'precise' keyword, and expressions it affects
     bool centroid     : 1;
     bool smooth       : 1;
     bool flat         : 1;
     bool nopersp      : 1;
+#ifdef AMD_EXTENSIONS
+    bool explicitInterp : 1;
+#endif
     bool patch        : 1;
     bool sample       : 1;
     bool coherent     : 1;
@@ -447,7 +499,11 @@ public:
     }
     bool isInterpolation() const
     {
+#ifdef AMD_EXTENSIONS
+        return flat || smooth || nopersp || explicitInterp;
+#else
         return flat || smooth || nopersp;
+#endif
     }
     bool isAuxiliary() const
     {
@@ -557,36 +613,47 @@ public:
     }
 
     // Implementing an embedded layout-qualifier class here, since C++ can't have a real class bitfield
-    void clearLayout()
+    void clearLayout()  // all layout
     {
-        layoutMatrix = ElmNone;
-        layoutPacking = ElpNone;
-        layoutOffset = layoutNotSet;
-        layoutAlign = layoutNotSet;
+        clearUniformLayout();
 
-        layoutLocation = layoutLocationEnd;
-        layoutComponent = layoutComponentEnd;
-        layoutSet = layoutSetEnd;
-        layoutBinding = layoutBindingEnd;
-        layoutIndex = layoutIndexEnd;
+        layoutPushConstant = false;
+#ifdef NV_EXTENSIONS
+        layoutPassthrough = false;
+        layoutViewportRelative = false;
+        // -2048 as the default value indicating layoutSecondaryViewportRelative is not set
+        layoutSecondaryViewportRelativeOffset = -2048;
+#endif
 
-        layoutStream = layoutStreamEnd;
+        clearInterstageLayout();
 
-        layoutXfbBuffer = layoutXfbBufferEnd;
-        layoutXfbStride = layoutXfbStrideEnd;
-        layoutXfbOffset = layoutXfbOffsetEnd;
-        layoutAttachment = layoutAttachmentEnd;
         layoutSpecConstantId = layoutSpecConstantIdEnd;
 
         layoutFormat = ElfNone;
-
-        layoutPushConstant = false;
     }
+    void clearInterstageLayout()
+    {
+        layoutLocation = layoutLocationEnd;
+        layoutComponent = layoutComponentEnd;
+        layoutIndex = layoutIndexEnd;
+        clearStreamLayout();
+        clearXfbLayout();
+    }
+    void clearStreamLayout()
+    {
+        layoutStream = layoutStreamEnd;
+    }
+    void clearXfbLayout()
+    {
+        layoutXfbBuffer = layoutXfbBufferEnd;
+        layoutXfbStride = layoutXfbStrideEnd;
+        layoutXfbOffset = layoutXfbOffsetEnd;
+    }
+
     bool hasLayout() const
     {
         return hasUniformLayout() ||
                hasAnyLocation() ||
-               hasBinding() ||
                hasStream() ||
                hasXfb() ||
                hasFormat() ||
@@ -606,8 +673,8 @@ public:
                  unsigned int layoutSet                 : 7;
     static const unsigned int layoutSetEnd         =   0x3F;
 
-                 unsigned int layoutBinding             : 8;
-    static const unsigned int layoutBindingEnd    =    0xFF;
+                 unsigned int layoutBinding            : 16;
+    static const unsigned int layoutBindingEnd    =  0xFFFF;
 
                  unsigned int layoutIndex              :  8;
     static const unsigned int layoutIndexEnd    =      0xFF;
@@ -634,14 +701,33 @@ public:
 
     bool layoutPushConstant;
 
+#ifdef NV_EXTENSIONS
+    bool layoutPassthrough;
+    bool layoutViewportRelative;
+    int layoutSecondaryViewportRelativeOffset;
+#endif
+
     bool hasUniformLayout() const
     {
         return hasMatrix() ||
                hasPacking() ||
                hasOffset() ||
                hasBinding() ||
+               hasSet() ||
                hasAlign();
     }
+    void clearUniformLayout() // only uniform specific
+    {
+        layoutMatrix = ElmNone;
+        layoutPacking = ElpNone;
+        layoutOffset = layoutNotSet;
+        layoutAlign = layoutNotSet;
+
+        layoutSet = layoutSetEnd;
+        layoutBinding = layoutBindingEnd;
+        layoutAttachment = layoutAttachmentEnd;
+    }
+
     bool hasMatrix() const
     {
         return layoutMatrix != ElmNone;
@@ -899,8 +985,14 @@ struct TShaderQualifiers {
     int localSize[3];         // compute shader
     int localSizeSpecId[3];   // compute shader specialization id for gl_WorkGroupSize
     bool earlyFragmentTests;  // fragment input
+    bool postDepthCoverage;   // fragment input
     TLayoutDepth layoutDepth;
     bool blendEquation;       // true if any blend equation was specified
+    int numViews;             // multiview extenstions
+
+#ifdef NV_EXTENSIONS
+    bool layoutOverrideCoverage;    // true if layout override_coverage set
+#endif
 
     void init()
     {
@@ -919,8 +1011,13 @@ struct TShaderQualifiers {
         localSizeSpecId[1] = TQualifier::layoutNotSet;
         localSizeSpecId[2] = TQualifier::layoutNotSet;
         earlyFragmentTests = false;
+        postDepthCoverage = false;
         layoutDepth = EldNone;
         blendEquation = false;
+        numViews = TQualifier::layoutNotSet;
+#ifdef NV_EXTENSIONS
+        layoutOverrideCoverage = false;
+#endif
     }
 
     // Merge in characteristics from the 'src' qualifier.  They can override when
@@ -953,10 +1050,18 @@ struct TShaderQualifiers {
         }
         if (src.earlyFragmentTests)
             earlyFragmentTests = true;
+        if (src.postDepthCoverage)
+            postDepthCoverage = true;
         if (src.layoutDepth)
             layoutDepth = src.layoutDepth;
         if (src.blendEquation)
             blendEquation = src.blendEquation;
+        if (src.numViews != TQualifier::layoutNotSet)
+            numViews = src.numViews;
+#ifdef NV_EXTENSIONS
+        if (src.layoutOverrideCoverage)
+            layoutOverrideCoverage = src.layoutOverrideCoverage;
+#endif
     }
 };
 
@@ -1039,29 +1144,32 @@ public:
     POOL_ALLOCATOR_NEW_DELETE(GetThreadPoolAllocator())
 
     // for "empty" type (no args) or simple scalar/vector/matrix
-    explicit TType(TBasicType t = EbtVoid, TStorageQualifier q = EvqTemporary, int vs = 1, int mc = 0, int mr = 0) :
-                            basicType(t), vectorSize(vs), matrixCols(mc), matrixRows(mr), arraySizes(nullptr),
-                            structure(nullptr), fieldName(nullptr), typeName(nullptr)
+    explicit TType(TBasicType t = EbtVoid, TStorageQualifier q = EvqTemporary, int vs = 1, int mc = 0, int mr = 0,
+                   bool isVector = false) :
+                            basicType(t), vectorSize(vs), matrixCols(mc), matrixRows(mr), vector1(isVector && vs == 1),
+                            arraySizes(nullptr), structure(nullptr), fieldName(nullptr), typeName(nullptr)
                             {
                                 sampler.clear();
                                 qualifier.clear();
                                 qualifier.storage = q;
                             }
     // for explicit precision qualifier
-    TType(TBasicType t, TStorageQualifier q, TPrecisionQualifier p, int vs = 1, int mc = 0, int mr = 0) :
-                            basicType(t), vectorSize(vs), matrixCols(mc), matrixRows(mr), arraySizes(nullptr),
-                            structure(nullptr), fieldName(nullptr), typeName(nullptr)
+    TType(TBasicType t, TStorageQualifier q, TPrecisionQualifier p, int vs = 1, int mc = 0, int mr = 0,
+          bool isVector = false) :
+                            basicType(t), vectorSize(vs), matrixCols(mc), matrixRows(mr), vector1(isVector && vs == 1),
+                            arraySizes(nullptr), structure(nullptr), fieldName(nullptr), typeName(nullptr)
                             {
                                 sampler.clear();
                                 qualifier.clear();
                                 qualifier.storage = q;
                                 qualifier.precision = p;
-                                assert(p >= 0 && p <= EpqHigh);
+                                assert(p >= EpqNone && p <= EpqHigh);
                             }
     // for turning a TPublicType into a TType, using a shallow copy
     explicit TType(const TPublicType& p) :
-                            basicType(p.basicType), vectorSize(p.vectorSize), matrixCols(p.matrixCols), matrixRows(p.matrixRows), arraySizes(p.arraySizes),
-                            structure(nullptr), fieldName(nullptr), typeName(nullptr)
+                            basicType(p.basicType),
+                            vectorSize(p.vectorSize), matrixCols(p.matrixCols), matrixRows(p.matrixRows), vector1(false),
+                            arraySizes(p.arraySizes), structure(nullptr), fieldName(nullptr), typeName(nullptr)
                             {
                                 if (basicType == EbtSampler)
                                     sampler = p.sampler;
@@ -1073,6 +1181,15 @@ public:
                                     typeName = NewPoolTString(p.userDef->getTypeName().c_str());
                                 }
                             }
+    // for construction of sampler types
+    TType(const TSampler& sampler, TStorageQualifier q = EvqUniform, TArraySizes* as = nullptr) :
+        basicType(EbtSampler), vectorSize(1), matrixCols(0), matrixRows(0), vector1(false),
+        arraySizes(as), structure(nullptr), fieldName(nullptr), typeName(nullptr),
+        sampler(sampler)
+    {
+        qualifier.clear();
+        qualifier.storage = q;
+    }
     // to efficiently make a dereferenced type
     // without ever duplicating the outer structure that will be thrown away
     // and using only shallow copy
@@ -1096,19 +1213,25 @@ public:
                                     // do a vector/matrix dereference
                                     shallowCopy(type);
                                     if (matrixCols > 0) {
+                                        // dereference from matrix to vector
                                         if (rowMajor)
                                             vectorSize = matrixCols;
                                         else
                                             vectorSize = matrixRows;
                                         matrixCols = 0;
                                         matrixRows = 0;
-                                    } else if (vectorSize > 1)
+                                        if (vectorSize == 1)
+                                            vector1 = true;
+                                    } else if (isVector()) {
+                                        // dereference from vector to scalar
                                         vectorSize = 1;
+                                        vector1 = false;
+                                    }
                                 }
                             }
     // for making structures, ...
     TType(TTypeList* userDef, const TString& n) :
-                            basicType(EbtStruct), vectorSize(1), matrixCols(0), matrixRows(0),
+                            basicType(EbtStruct), vectorSize(1), matrixCols(0), matrixRows(0), vector1(false),
                             arraySizes(nullptr), structure(userDef), fieldName(nullptr)
                             {
                                 sampler.clear();
@@ -1117,7 +1240,7 @@ public:
                             }
     // For interface blocks
     TType(TTypeList* userDef, const TString& n, const TQualifier& q) :
-                            basicType(EbtBlock), vectorSize(1), matrixCols(0), matrixRows(0),
+                            basicType(EbtBlock), vectorSize(1), matrixCols(0), matrixRows(0), vector1(false),
                             qualifier(q), arraySizes(nullptr), structure(userDef), fieldName(nullptr)
                             {
                                 sampler.clear();
@@ -1136,45 +1259,39 @@ public:
         vectorSize = copyOf.vectorSize;
         matrixCols = copyOf.matrixCols;
         matrixRows = copyOf.matrixRows;
+        vector1 = copyOf.vector1;
         arraySizes = copyOf.arraySizes;  // copying the pointer only, not the contents
         structure = copyOf.structure;
         fieldName = copyOf.fieldName;
         typeName = copyOf.typeName;
     }
 
+    // Make complete copy of the whole type graph rooted at 'copyOf'.
     void deepCopy(const TType& copyOf)
     {
-        shallowCopy(copyOf);
-
-        if (copyOf.arraySizes) {
-            arraySizes = new TArraySizes;
-            *arraySizes = *copyOf.arraySizes;
-        }
-
-        if (copyOf.structure) {
-            structure = new TTypeList;
-            for (unsigned int i = 0; i < copyOf.structure->size(); ++i) {
-                TTypeLoc typeLoc;
-                typeLoc.loc = (*copyOf.structure)[i].loc;
-                typeLoc.type = new TType();
-                typeLoc.type->deepCopy(*(*copyOf.structure)[i].type);
-                structure->push_back(typeLoc);
-            }
-        }
-
-        if (copyOf.fieldName)
-            fieldName = NewPoolTString(copyOf.fieldName->c_str());
-        if (copyOf.typeName)
-            typeName = NewPoolTString(copyOf.typeName->c_str());
+        TMap<TTypeList*,TTypeList*> copied;  // to enable copying a type graph as a graph, not a tree
+        deepCopy(copyOf, copied);
     }
 
-    TType* clone()
+    // Recursively make temporary
+    void makeTemporary()
+    {
+        getQualifier().makeTemporary();
+
+        if (isStruct())
+            for (unsigned int i = 0; i < structure->size(); ++i)
+                (*structure)[i].type->makeTemporary();
+    }
+
+    TType* clone() const
     {
         TType *newType = new TType();
         newType->deepCopy(*this);
 
         return newType;
     }
+
+    void makeVector() { vector1 = true; }
 
     // Merge type from parent, where a parentType is at the beginning of a declaration,
     // establishing some characteristics for all subsequent names, while this type
@@ -1186,6 +1303,7 @@ public:
         vectorSize = parentType.vectorSize;
         matrixCols = parentType.matrixCols;
         matrixRows = parentType.matrixRows;
+        vector1 = false;                      // TPublicType is only GLSL which so far has no vec1
         qualifier = parentType.qualifier;
         sampler = parentType.sampler;
         if (parentType.arraySizes)
@@ -1215,11 +1333,12 @@ public:
 
     virtual TBasicType getBasicType() const { return basicType; }
     virtual const TSampler& getSampler() const { return sampler; }
+    virtual TSampler& getSampler() { return sampler; }
 
     virtual       TQualifier& getQualifier()       { return qualifier; }
     virtual const TQualifier& getQualifier() const { return qualifier; }
 
-    virtual int getVectorSize() const { return vectorSize; }
+    virtual int getVectorSize() const { return vectorSize; }  // returns 1 for either scalar or vector of size 1, valid for both
     virtual int getMatrixCols() const { return matrixCols; }
     virtual int getMatrixRows() const { return matrixRows; }
     virtual int getOuterArraySize()  const { return arraySizes->getOuterSize(); }
@@ -1230,120 +1349,123 @@ public:
     virtual const TArraySizes* getArraySizes() const { return arraySizes; }
     virtual       TArraySizes& getArraySizes()       { assert(arraySizes != nullptr); return *arraySizes; }
 
-    virtual bool isScalar() const { return vectorSize == 1 && ! isStruct() && ! isArray(); }
-    virtual bool isVector() const { return vectorSize > 1; }
+    virtual bool isScalar() const { return ! isVector() && ! isMatrix() && ! isStruct() && ! isArray(); }
+    virtual bool isScalarOrVec1() const { return isScalar() || vector1; }
+    virtual bool isVector() const { return vectorSize > 1 || vector1; }
     virtual bool isMatrix() const { return matrixCols ? true : false; }
     virtual bool isArray()  const { return arraySizes != nullptr; }
     virtual bool isExplicitlySizedArray() const { return isArray() && getOuterArraySize() != UnsizedArraySize; }
     virtual bool isImplicitlySizedArray() const { return isArray() && getOuterArraySize() == UnsizedArraySize && qualifier.storage != EvqBuffer; }
     virtual bool isRuntimeSizedArray()    const { return isArray() && getOuterArraySize() == UnsizedArraySize && qualifier.storage == EvqBuffer; }
     virtual bool isStruct() const { return structure != nullptr; }
+#ifdef AMD_EXTENSIONS
+    virtual bool isFloatingDomain() const { return basicType == EbtFloat || basicType == EbtDouble || basicType == EbtFloat16; }
+#else
+    virtual bool isFloatingDomain() const { return basicType == EbtFloat || basicType == EbtDouble; }
+#endif
+    virtual bool isIntegerDomain() const
+    {
+        switch (basicType) {
+        case EbtInt:
+        case EbtUint:
+        case EbtInt64:
+        case EbtUint64:
+#ifdef AMD_EXTENSIONS
+        case EbtInt16:
+        case EbtUint16:
+#endif
+        case EbtAtomicUint:
+            return true;
+        default:
+            break;
+        }
+        return false;
+    }
+    virtual bool isOpaque() const { return basicType == EbtSampler || basicType == EbtAtomicUint; }
+    virtual bool isBuiltIn() const { return getQualifier().builtIn != EbvNone; }
 
     // "Image" is a superset of "Subpass"
     virtual bool isImage() const   { return basicType == EbtSampler && getSampler().isImage(); }
     virtual bool isSubpass() const { return basicType == EbtSampler && getSampler().isSubpass(); }
 
+    // return true if this type contains any subtype which satisfies the given predicate.
+    template <typename P> 
+    bool contains(P predicate) const
+    {
+        if (predicate(this))
+            return true;
+
+        const auto hasa = [predicate](const TTypeLoc& tl) { return tl.type->contains(predicate); };
+
+        return structure && std::any_of(structure->begin(), structure->end(), hasa);
+    }
+
     // Recursively checks if the type contains the given basic type
     virtual bool containsBasicType(TBasicType checkType) const
     {
-        if (basicType == checkType)
-            return true;
-        if (! structure)
-            return false;
-        for (unsigned int i = 0; i < structure->size(); ++i) {
-            if ((*structure)[i].type->containsBasicType(checkType))
-                return true;
-        }
-        return false;
+        return contains([checkType](const TType* t) { return t->basicType == checkType; } );
     }
 
     // Recursively check the structure for any arrays, needed for some error checks
     virtual bool containsArray() const
     {
-        if (isArray())
-            return true;
-        if (structure == nullptr)
-            return false;
-        for (unsigned int i = 0; i < structure->size(); ++i) {
-            if ((*structure)[i].type->containsArray())
-                return true;
-        }
-        return false;
+        return contains([](const TType* t) { return t->isArray(); } );
     }
 
     // Check the structure for any structures, needed for some error checks
     virtual bool containsStructure() const
     {
-        if (structure == nullptr)
-            return false;
-        for (unsigned int i = 0; i < structure->size(); ++i) {
-            if ((*structure)[i].type->structure)
-                return true;
-        }
-        return false;
+        return contains([this](const TType* t) { return t != this && t->isStruct(); } );
     }
 
     // Recursively check the structure for any implicitly-sized arrays, needed for triggering a copyUp().
     virtual bool containsImplicitlySizedArray() const
     {
-        if (isImplicitlySizedArray())
-            return true;
-        if (structure == nullptr)
-            return false;
-        for (unsigned int i = 0; i < structure->size(); ++i) {
-            if ((*structure)[i].type->containsImplicitlySizedArray())
-                return true;
-        }
-        return false;
+        return contains([](const TType* t) { return t->isImplicitlySizedArray(); } );
     }
 
     virtual bool containsOpaque() const
     {
-        if (basicType == EbtSampler || basicType == EbtAtomicUint)
-            return true;
-        if (! structure)
-            return false;
-        for (unsigned int i = 0; i < structure->size(); ++i) {
-            if ((*structure)[i].type->containsOpaque())
-                return true;
-        }
-        return false;
+        return contains([](const TType* t) { return t->isOpaque(); } );
+    }
+
+    // Recursively checks if the type contains a built-in variable
+    virtual bool containsBuiltIn() const
+    {
+        return contains([](const TType* t) { return t->isBuiltIn(); } );
     }
 
     virtual bool containsNonOpaque() const
     {
-        // list all non-opaque types
-        switch (basicType) {
-        case EbtVoid:
-        case EbtFloat:
-        case EbtDouble:
-        case EbtInt:
-        case EbtUint:
-        case EbtBool:
-            return true;
-        default:
-            break;
-        }
-        if (! structure)
-            return false;
-        for (unsigned int i = 0; i < structure->size(); ++i) {
-            if ((*structure)[i].type->containsNonOpaque())
+        const auto nonOpaque = [](const TType* t) {
+            switch (t->basicType) {
+            case EbtVoid:
+            case EbtFloat:
+            case EbtDouble:
+#ifdef AMD_EXTENSIONS
+            case EbtFloat16:
+#endif
+            case EbtInt:
+            case EbtUint:
+            case EbtInt64:
+            case EbtUint64:
+#ifdef AMD_EXTENSIONS
+            case EbtInt16:
+            case EbtUint16:
+#endif
+            case EbtBool:
                 return true;
-        }
-        return false;
+            default:
+                return false;
+            }
+        };
+
+        return contains(nonOpaque);
     }
 
     virtual bool containsSpecializationSize() const
     {
-        if (isArray() && arraySizes->containsNode())
-            return true;
-        if (! structure)
-            return false;
-        for (unsigned int i = 0; i < structure->size(); ++i) {
-            if ((*structure)[i].type->containsSpecializationSize())
-                return true;
-        }
-        return false;
+        return contains([](const TType* t) { return t->isArray() && t->arraySizes->isOuterSpecialization(); } );
     }
 
     // Array editing methods.  Array descriptors can be shared across
@@ -1407,8 +1529,17 @@ public:
         case EbtVoid:              return "void";
         case EbtFloat:             return "float";
         case EbtDouble:            return "double";
+#ifdef AMD_EXTENSIONS
+        case EbtFloat16:           return "float16_t";
+#endif
         case EbtInt:               return "int";
         case EbtUint:              return "uint";
+        case EbtInt64:             return "int64_t";
+        case EbtUint64:            return "uint64_t";
+#ifdef AMD_EXTENSIONS
+        case EbtInt16:             return "int16_t";
+        case EbtUint16:            return "uint16_t";
+#endif
         case EbtBool:              return "bool";
         case EbtAtomicUint:        return "atomic_uint";
         case EbtSampler:           return "sampler/image";
@@ -1420,10 +1551,11 @@ public:
 
     TString getCompleteString() const
     {
-        const int maxSize = GlslangMaxTypeLength;
-        char buf[maxSize];
-        char* p = &buf[0];
-        char* end = &buf[maxSize];
+        TString typeString;
+
+        const auto appendStr  = [&](const char* s)  { typeString.append(s); };
+        const auto appendUint = [&](unsigned int u) { typeString.append(std::to_string(u).c_str()); };
+        const auto appendInt  = [&](int i)          { typeString.append(std::to_string(i).c_str()); };
 
         if (qualifier.hasLayout()) {
             // To reduce noise, skip this if the only layout is an xfb_buffer
@@ -1431,114 +1563,175 @@ public:
             TQualifier noXfbBuffer = qualifier;
             noXfbBuffer.layoutXfbBuffer = TQualifier::layoutXfbBufferEnd;
             if (noXfbBuffer.hasLayout()) {
-                p += snprintf(p, end - p, "layout(");
+                appendStr("layout(");
                 if (qualifier.hasAnyLocation()) {
-                    p += snprintf(p, end - p, "location=%d ", qualifier.layoutLocation);
-                    if (qualifier.hasComponent())
-                        p += snprintf(p, end - p, "component=%d ", qualifier.layoutComponent);
-                    if (qualifier.hasIndex())
-                        p += snprintf(p, end - p, "index=%d ", qualifier.layoutIndex);
+                    appendStr(" location=");
+                    appendUint(qualifier.layoutLocation);
+                    if (qualifier.hasComponent()) {
+                        appendStr(" component=");
+                        appendUint(qualifier.layoutComponent);
+                    }
+                    if (qualifier.hasIndex()) {
+                        appendStr(" index=");
+                        appendUint(qualifier.layoutIndex);
+                    }
                 }
-                if (qualifier.hasSet())
-                    p += snprintf(p, end - p, "set=%d ", qualifier.layoutSet);
-                if (qualifier.hasBinding())
-                    p += snprintf(p, end - p, "binding=%d ", qualifier.layoutBinding);
-                if (qualifier.hasStream())
-                    p += snprintf(p, end - p, "stream=%d ", qualifier.layoutStream);
-                if (qualifier.hasMatrix())
-                    p += snprintf(p, end - p, "%s ", TQualifier::getLayoutMatrixString(qualifier.layoutMatrix));
-                if (qualifier.hasPacking())
-                    p += snprintf(p, end - p, "%s ", TQualifier::getLayoutPackingString(qualifier.layoutPacking));
-                if (qualifier.hasOffset())
-                    p += snprintf(p, end - p, "offset=%d ", qualifier.layoutOffset);
-                if (qualifier.hasAlign())
-                    p += snprintf(p, end - p, "align=%d ", qualifier.layoutAlign);
-                if (qualifier.hasFormat())
-                    p += snprintf(p, end - p, "%s ", TQualifier::getLayoutFormatString(qualifier.layoutFormat));
-                if (qualifier.hasXfbBuffer() && qualifier.hasXfbOffset())
-                    p += snprintf(p, end - p, "xfb_buffer=%d ", qualifier.layoutXfbBuffer);
-                if (qualifier.hasXfbOffset())
-                    p += snprintf(p, end - p, "xfb_offset=%d ", qualifier.layoutXfbOffset);
-                if (qualifier.hasXfbStride())
-                    p += snprintf(p, end - p, "xfb_stride=%d ", qualifier.layoutXfbStride);
-                if (qualifier.hasAttachment())
-                    p += snprintf(p, end - p, "input_attachment_index=%d ", qualifier.layoutAttachment);
-                if (qualifier.hasSpecConstantId())
-                    p += snprintf(p, end - p, "constant_id=%d ", qualifier.layoutSpecConstantId);
+                if (qualifier.hasSet()) {
+                    appendStr(" set=");
+                    appendUint(qualifier.layoutSet);
+                }
+                if (qualifier.hasBinding()) {
+                    appendStr(" binding=");
+                    appendUint(qualifier.layoutBinding);
+                }
+                if (qualifier.hasStream()) {
+                    appendStr(" stream=");
+                    appendUint(qualifier.layoutStream);
+                }
+                if (qualifier.hasMatrix()) {
+                    appendStr(" ");
+                    appendStr(TQualifier::getLayoutMatrixString(qualifier.layoutMatrix));
+                }
+                if (qualifier.hasPacking()) {
+                    appendStr(" ");
+                    appendStr(TQualifier::getLayoutPackingString(qualifier.layoutPacking));
+                }
+                if (qualifier.hasOffset()) {
+                    appendStr(" offset=");
+                    appendInt(qualifier.layoutOffset);
+                }
+                if (qualifier.hasAlign()) {
+                    appendStr(" align=");
+                    appendInt(qualifier.layoutAlign);
+                }
+                if (qualifier.hasFormat()) {
+                    appendStr(" ");
+                    appendStr(TQualifier::getLayoutFormatString(qualifier.layoutFormat));
+                }
+                if (qualifier.hasXfbBuffer() && qualifier.hasXfbOffset()) {
+                    appendStr(" xfb_buffer=");
+                    appendUint(qualifier.layoutXfbBuffer);
+                }
+                if (qualifier.hasXfbOffset()) {
+                    appendStr(" xfb_offset=");
+                    appendUint(qualifier.layoutXfbOffset);
+                }
+                if (qualifier.hasXfbStride()) {
+                    appendStr(" xfb_stride=");
+                    appendUint(qualifier.layoutXfbStride);
+                }
+                if (qualifier.hasAttachment()) {
+                    appendStr(" input_attachment_index=");
+                    appendUint(qualifier.layoutAttachment);
+                }
+                if (qualifier.hasSpecConstantId()) {
+                    appendStr(" constant_id=");
+                    appendUint(qualifier.layoutSpecConstantId);
+                }
                 if (qualifier.layoutPushConstant)
-                    p += snprintf(p, end - p, "push_constant ");
-                p += snprintf(p, end - p, ") ");
+                    appendStr(" push_constant");
+
+#ifdef NV_EXTENSIONS
+                if (qualifier.layoutPassthrough)
+                    appendStr(" passthrough");
+                if (qualifier.layoutViewportRelative)
+                    appendStr(" layoutViewportRelative");
+                if (qualifier.layoutSecondaryViewportRelativeOffset != -2048) {
+                    appendStr(" layoutSecondaryViewportRelativeOffset=");
+                    appendInt(qualifier.layoutSecondaryViewportRelativeOffset);
+                }
+#endif
+
+                appendStr(")");
             }
         }
 
         if (qualifier.invariant)
-            p += snprintf(p, end - p, "invariant ");
+            appendStr(" invariant");
+        if (qualifier.noContraction)
+            appendStr(" noContraction");
         if (qualifier.centroid)
-            p += snprintf(p, end - p, "centroid ");
+            appendStr(" centroid");
         if (qualifier.smooth)
-            p += snprintf(p, end - p, "smooth ");
+            appendStr(" smooth");
         if (qualifier.flat)
-            p += snprintf(p, end - p, "flat ");
+            appendStr(" flat");
         if (qualifier.nopersp)
-            p += snprintf(p, end - p, "noperspective ");
+            appendStr(" noperspective");
+#ifdef AMD_EXTENSIONS
+        if (qualifier.explicitInterp)
+            appendStr(" __explicitInterpAMD");
+#endif
         if (qualifier.patch)
-            p += snprintf(p, end - p, "patch ");
+            appendStr(" patch");
         if (qualifier.sample)
-            p += snprintf(p, end - p, "sample ");
+            appendStr(" sample");
         if (qualifier.coherent)
-            p += snprintf(p, end - p, "coherent ");
+            appendStr(" coherent");
         if (qualifier.volatil)
-            p += snprintf(p, end - p, "volatile ");
+            appendStr(" volatile");
         if (qualifier.restrict)
-            p += snprintf(p, end - p, "restrict ");
+            appendStr(" restrict");
         if (qualifier.readonly)
-            p += snprintf(p, end - p, "readonly ");
+            appendStr(" readonly");
         if (qualifier.writeonly)
-            p += snprintf(p, end - p, "writeonly ");
+            appendStr(" writeonly");
         if (qualifier.specConstant)
-            p += snprintf(p, end - p, "specialization-constant ");
-        p += snprintf(p, end - p, "%s ", getStorageQualifierString());
-        if (arraySizes) {
+            appendStr(" specialization-constant");
+        appendStr(" ");
+        appendStr(getStorageQualifierString());
+        if (isArray()) {
             for(int i = 0; i < (int)arraySizes->getNumDims(); ++i) {
                 int size = arraySizes->getDimSize(i);
                 if (size == 0)
-                    p += snprintf(p, end - p, "implicitly-sized array of ");
-                else
-                    p += snprintf(p, end - p, "%d-element array of ", arraySizes->getDimSize(i));
+                    appendStr(" implicitly-sized array of");
+                else {
+                    appendStr(" ");
+                    appendInt(arraySizes->getDimSize(i));
+                    appendStr("-element array of");
+                }
             }
         }
-        if (qualifier.precision != EpqNone)
-            p += snprintf(p, end - p, "%s ", getPrecisionQualifierString());
-        if (matrixCols > 0)
-            p += snprintf(p, end - p, "%dX%d matrix of ", matrixCols, matrixRows);
-        else if (vectorSize > 1)
-            p += snprintf(p, end - p, "%d-component vector of ", vectorSize);
+        if (qualifier.precision != EpqNone) {
+            appendStr(" ");
+            appendStr(getPrecisionQualifierString());
+        }
+        if (isMatrix()) {
+            appendStr(" ");
+            appendInt(matrixCols);
+            appendStr("X");
+            appendInt(matrixRows);
+            appendStr(" matrix of");
+        } else if (isVector()) {
+            appendStr(" ");
+            appendInt(vectorSize);
+            appendStr("-component vector of");
+        }
 
-        *p = 0;
-        TString s(buf);
-        s.append(getBasicTypeString());
+        appendStr(" ");
+        typeString.append(getBasicTypeString());
 
         if (qualifier.builtIn != EbvNone) {
-            s.append(" ");
-            s.append(getBuiltInVariableString());
+            appendStr(" ");
+            appendStr(getBuiltInVariableString());
         }
 
         // Add struct/block members
         if (structure) {
-            s.append("{");
+            appendStr("{");
             for (size_t i = 0; i < structure->size(); ++i) {
                 if (! (*structure)[i].type->hiddenMember()) {
-                    s.append((*structure)[i].type->getCompleteString());
-                    s.append(" ");
-                    s.append((*structure)[i].type->getFieldName());
+                    typeString.append((*structure)[i].type->getCompleteString());
+                    typeString.append(" ");
+                    typeString.append((*structure)[i].type->getFieldName());
                     if (i < structure->size() - 1)
-                        s.append(", ");
+                        appendStr(", ");
                 }
             }
-            s.append("}");
+            appendStr("}");
         }
 
-        return s;
+        return typeString;
     }
 
     TString getBasicTypeString() const
@@ -1553,6 +1746,7 @@ public:
     const char* getBuiltInVariableString() const { return GetBuiltInVariableString(qualifier.builtIn); }
     const char* getPrecisionQualifierString() const { return GetPrecisionQualifierString(qualifier.precision); }
     const TTypeList* getStruct() const { return structure; }
+    void setStruct(TTypeList* s) { structure = s; }
     TTypeList* getWritableStruct() const { return structure; }  // This should only be used when known to not be sharing with other threads
 
     int computeNumComponents() const
@@ -1575,7 +1769,7 @@ public:
     }
 
     // append this type's mangled name to the passed in 'name'
-    void appendMangledName(TString& name)
+    void appendMangledName(TString& name) const
     {
         buildMangledName(name);
         name += ';' ;
@@ -1643,6 +1837,7 @@ public:
                vectorSize == right.vectorSize &&
                matrixCols == right.matrixCols &&
                matrixRows == right.matrixRows &&
+                  vector1 == right.vector1    &&
                sameStructType(right);
     }
 
@@ -1662,19 +1857,60 @@ protected:
     TType(const TType& type);
     TType& operator=(const TType& type);
 
-    void buildMangledName(TString&);
+    // Recursively copy a type graph, while preserving the graph-like
+    // quality. That is, don't make more than one copy of a structure that
+    // gets reused multiple times in the type graph.
+    void deepCopy(const TType& copyOf, TMap<TTypeList*,TTypeList*>& copiedMap)
+    {
+        shallowCopy(copyOf);
+
+        if (copyOf.arraySizes) {
+            arraySizes = new TArraySizes;
+            *arraySizes = *copyOf.arraySizes;
+        }
+
+        if (copyOf.structure) {
+            auto prevCopy = copiedMap.find(copyOf.structure);
+            if (prevCopy != copiedMap.end())
+                structure = prevCopy->second;
+            else {
+                structure = new TTypeList;
+                copiedMap[copyOf.structure] = structure;
+                for (unsigned int i = 0; i < copyOf.structure->size(); ++i) {
+                    TTypeLoc typeLoc;
+                    typeLoc.loc = (*copyOf.structure)[i].loc;
+                    typeLoc.type = new TType();
+                    typeLoc.type->deepCopy(*(*copyOf.structure)[i].type, copiedMap);
+                    structure->push_back(typeLoc);
+                }
+            }
+        }
+
+        if (copyOf.fieldName)
+            fieldName = NewPoolTString(copyOf.fieldName->c_str());
+        if (copyOf.typeName)
+            typeName = NewPoolTString(copyOf.typeName->c_str());
+    }
+
+
+    void buildMangledName(TString&) const;
 
     TBasicType basicType : 8;
-    int vectorSize       : 4;
+    int vectorSize       : 4;  // 1 means either scalar or 1-component vector; see vector1 to disambiguate.
     int matrixCols       : 4;
     int matrixRows       : 4;
-    TSampler sampler;
+    bool vector1         : 1;  // Backward-compatible tracking of a 1-component vector distinguished from a scalar.
+                               // GLSL 4.5 never has a 1-component vector; so this will always be false until such
+                               // functionality is added.
+                               // HLSL does have a 1-component vectors, so this will be true to disambiguate
+                               // from a scalar.
     TQualifier qualifier;
 
     TArraySizes* arraySizes;    // nullptr unless an array; can be shared across types
     TTypeList* structure;       // nullptr unless this is a struct; can be shared across types
     TString *fieldName;         // for structure field names
     TString *typeName;          // for structure type name
+    TSampler sampler;
 };
 
 } // end namespace glslang

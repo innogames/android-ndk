@@ -1,12 +1,12 @@
 //
-//Copyright (C) 2002-2005  3Dlabs Inc. Ltd.
-//Copyright (C) 2012-2013 LunarG, Inc.
+// Copyright (C) 2002-2005  3Dlabs Inc. Ltd.
+// Copyright (C) 2012-2013 LunarG, Inc.
 //
-//All rights reserved.
+// All rights reserved.
 //
-//Redistribution and use in source and binary forms, with or without
-//modification, are permitted provided that the following conditions
-//are met:
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions
+// are met:
 //
 //    Redistributions of source code must retain the above copyright
 //    notice, this list of conditions and the following disclaimer.
@@ -20,18 +20,18 @@
 //    contributors may be used to endorse or promote products derived
 //    from this software without specific prior written permission.
 //
-//THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-//"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-//LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
-//FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
-//COPYRIGHT HOLDERS OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
-//INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
-//BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
-//LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-//CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
-//LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
-//ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-//POSSIBILITY OF SUCH DAMAGE.
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
+// FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
+// COPYRIGHT HOLDERS OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
+// INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
+// BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+// LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+// CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+// LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
+// ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+// POSSIBILITY OF SUCH DAMAGE.
 //
 
 #include "localintermediate.h"
@@ -57,7 +57,7 @@ bool isNan(double x)
     u.d = x;
     int bitPatternL = u.i[0];
     int bitPatternH = u.i[1];
-    return (bitPatternH & 0x7ff80000) == 0x7ff80000 && 
+    return (bitPatternH & 0x7ff80000) == 0x7ff80000 &&
            ((bitPatternH & 0xFFFFF) != 0 || bitPatternL != 0);
 }
 
@@ -68,7 +68,7 @@ bool isInf(double x)
     u.d = x;
     int bitPatternL = u.i[0];
     int bitPatternH = u.i[1];
-    return (bitPatternH & 0x7ff00000) == 0x7ff00000 && 
+    return (bitPatternH & 0x7ff00000) == 0x7ff00000 &&
            (bitPatternH & 0xFFFFF) == 0 && bitPatternL == 0;
 }
 
@@ -131,7 +131,7 @@ TIntermTyped* TIntermConstantUnion::fold(TOperator op, const TIntermTyped* right
             TConstUnionArray smearedArray(newComps, rightNode->getConstArray()[0]);
             rightUnionArray = smearedArray;
         } else if (constComps > 1 && newComps == 1) {
-            // for a case like vec4 f = 1.2 + vec4(2,3,4,5);            
+            // for a case like vec4 f = 1.2 + vec4(2,3,4,5);
             newComps = constComps;
             rightUnionArray = rightNode->getConstArray();
             TConstUnionArray smearedArray(newComps, getConstArray()[0]);
@@ -176,6 +176,9 @@ TIntermTyped* TIntermConstantUnion::fold(TOperator op, const TIntermTyped* right
             switch (getType().getBasicType()) {
             case EbtDouble:
             case EbtFloat:
+#ifdef AMD_EXTENSIONS
+            case EbtFloat16:
+#endif
                 newConstArray[i].setDConst(leftUnionArray[i].getDConst() / rightUnionArray[i].getDConst());
                 break;
 
@@ -190,10 +193,43 @@ TIntermTyped* TIntermConstantUnion::fold(TOperator op, const TIntermTyped* right
 
             case EbtUint:
                 if (rightUnionArray[i] == 0) {
-                    newConstArray[i].setUConst(0xFFFFFFFF);
+                    newConstArray[i].setUConst(0xFFFFFFFFu);
                 } else
                     newConstArray[i].setUConst(leftUnionArray[i].getUConst() / rightUnionArray[i].getUConst());
                 break;
+
+            case EbtInt64:
+                if (rightUnionArray[i] == 0)
+                    newConstArray[i].setI64Const(0x7FFFFFFFFFFFFFFFll);
+                else if (rightUnionArray[i].getI64Const() == -1 && leftUnionArray[i].getI64Const() == (long long)0x8000000000000000)
+                    newConstArray[i].setI64Const(0x8000000000000000);
+                else
+                    newConstArray[i].setI64Const(leftUnionArray[i].getI64Const() / rightUnionArray[i].getI64Const());
+                break;
+
+            case EbtUint64:
+                if (rightUnionArray[i] == 0) {
+                    newConstArray[i].setU64Const(0xFFFFFFFFFFFFFFFFull);
+                } else
+                    newConstArray[i].setU64Const(leftUnionArray[i].getU64Const() / rightUnionArray[i].getU64Const());
+                break;
+#ifdef AMD_EXTENSIONS
+            case EbtInt16:
+                if (rightUnionArray[i] == 0)
+                    newConstArray[i].setIConst(0x7FFF);
+                else if (rightUnionArray[i].getIConst() == -1 && leftUnionArray[i].getIConst() == (int)0x8000)
+                    newConstArray[i].setIConst(0x8000);
+                else
+                    newConstArray[i].setIConst(leftUnionArray[i].getIConst() / rightUnionArray[i].getIConst());
+                break;
+
+            case EbtUint16:
+                if (rightUnionArray[i] == 0) {
+                    newConstArray[i].setUConst(0xFFFFu);
+                } else
+                    newConstArray[i].setUConst(leftUnionArray[i].getUConst() / rightUnionArray[i].getUConst());
+                break;
+#endif
             default:
                 return 0;
             }
@@ -383,6 +419,27 @@ TIntermTyped* TIntermConstantUnion::fold(TOperator op, const TType& returnType) 
         break;
     }
 
+    case EOpAny:
+    {
+        bool result = false;
+        for (int i = 0; i < objectSize; i++) {
+            if (unionArray[i].getBConst())
+                result = true;
+        }
+        newConstArray[0].setBConst(result);
+        break;
+    }
+    case EOpAll:
+    {
+        bool result = true;
+        for (int i = 0; i < objectSize; i++) {
+            if (! unionArray[i].getBConst())
+                result = false;
+        }
+        newConstArray[0].setBConst(result);
+        break;
+    }
+
     // TODO: 3.0 Functionality: unary constant folding: the rest of the ops have to be fleshed out
 
     case EOpPackSnorm2x16:
@@ -396,11 +453,8 @@ TIntermTyped* TIntermConstantUnion::fold(TOperator op, const TType& returnType) 
     case EOpDeterminant:
     case EOpMatrixInverse:
     case EOpTranspose:
-
-    case EOpAny:
-    case EOpAll:
         return 0;
-    
+
     default:
         assert(componentWise);
         break;
@@ -416,9 +470,20 @@ TIntermTyped* TIntermConstantUnion::fold(TOperator op, const TType& returnType) 
         case EOpNegative:
             switch (getType().getBasicType()) {
             case EbtDouble:
+#ifdef AMD_EXTENSIONS
+            case EbtFloat16:
+#endif
             case EbtFloat: newConstArray[i].setDConst(-unionArray[i].getDConst()); break;
+#ifdef AMD_EXTENSIONS
+            case EbtInt16:
+#endif
             case EbtInt:   newConstArray[i].setIConst(-unionArray[i].getIConst()); break;
+#ifdef AMD_EXTENSIONS
+            case EbtUint16:
+#endif
             case EbtUint:  newConstArray[i].setUConst(static_cast<unsigned int>(-static_cast<int>(unionArray[i].getUConst())));  break;
+            case EbtInt64: newConstArray[i].setI64Const(-unionArray[i].getI64Const()); break;
+            case EbtUint64: newConstArray[i].setU64Const(static_cast<unsigned long long>(-static_cast<long long>(unionArray[i].getU64Const())));  break;
             default:
                 return 0;
             }
@@ -566,6 +631,16 @@ TIntermTyped* TIntermConstantUnion::fold(TOperator op, const TType& returnType) 
         case EOpFloatBitsToUint:
         case EOpIntBitsToFloat:
         case EOpUintBitsToFloat:
+        case EOpDoubleBitsToInt64:
+        case EOpDoubleBitsToUint64:
+        case EOpInt64BitsToDouble:
+        case EOpUint64BitsToDouble:
+#ifdef AMD_EXTENSIONS
+        case EOpFloat16BitsToInt16:
+        case EOpFloat16BitsToUint16:
+        case EOpInt16BitsToFloat16:
+        case EOpUint16BitsToFloat16:
+#endif
 
         default:
             return 0;
@@ -582,9 +657,12 @@ TIntermTyped* TIntermConstantUnion::fold(TOperator op, const TType& returnType) 
 //
 // Do constant folding for an aggregate node that has all its children
 // as constants and an operator that requires constant folding.
-// 
+//
 TIntermTyped* TIntermediate::fold(TIntermAggregate* aggrNode)
 {
+    if (aggrNode == nullptr)
+        return aggrNode;
+
     if (! areAllChildConst(aggrNode))
         return aggrNode;
 
@@ -650,8 +728,17 @@ TIntermTyped* TIntermediate::fold(TIntermAggregate* aggrNode)
     // Second, do the actual folding
 
     bool isFloatingPoint = children[0]->getAsTyped()->getBasicType() == EbtFloat ||
+#ifdef AMD_EXTENSIONS
+                           children[0]->getAsTyped()->getBasicType() == EbtFloat16 ||
+#endif
                            children[0]->getAsTyped()->getBasicType() == EbtDouble;
-    bool isSigned = children[0]->getAsTyped()->getBasicType() == EbtInt;
+    bool isSigned = children[0]->getAsTyped()->getBasicType() == EbtInt ||
+#ifdef AMD_EXTENSIONS
+                    children[0]->getAsTyped()->getBasicType() == EbtInt16 ||
+#endif
+                    children[0]->getAsTyped()->getBasicType() == EbtInt64;
+    bool isInt64 = children[0]->getAsTyped()->getBasicType() == EbtInt64 ||
+                   children[0]->getAsTyped()->getBasicType() == EbtUint64;
     if (componentwise) {
         for (int comp = 0; comp < objectSize; comp++) {
 
@@ -674,29 +761,52 @@ TIntermTyped* TIntermediate::fold(TIntermAggregate* aggrNode)
             case EOpMin:
                 if (isFloatingPoint)
                     newConstArray[comp].setDConst(std::min(childConstUnions[0][arg0comp].getDConst(), childConstUnions[1][arg1comp].getDConst()));
-                else if (isSigned)
-                    newConstArray[comp].setIConst(std::min(childConstUnions[0][arg0comp].getIConst(), childConstUnions[1][arg1comp].getIConst()));
-                else
-                    newConstArray[comp].setUConst(std::min(childConstUnions[0][arg0comp].getUConst(), childConstUnions[1][arg1comp].getUConst()));
+                else if (isSigned) {
+                    if (isInt64)
+                        newConstArray[comp].setI64Const(std::min(childConstUnions[0][arg0comp].getI64Const(), childConstUnions[1][arg1comp].getI64Const()));
+                    else
+                        newConstArray[comp].setIConst(std::min(childConstUnions[0][arg0comp].getIConst(), childConstUnions[1][arg1comp].getIConst()));
+                } else {
+                    if (isInt64)
+                        newConstArray[comp].setU64Const(std::min(childConstUnions[0][arg0comp].getU64Const(), childConstUnions[1][arg1comp].getU64Const()));
+                    else
+                        newConstArray[comp].setUConst(std::min(childConstUnions[0][arg0comp].getUConst(), childConstUnions[1][arg1comp].getUConst()));
+                }
                 break;
             case EOpMax:
                 if (isFloatingPoint)
                     newConstArray[comp].setDConst(std::max(childConstUnions[0][arg0comp].getDConst(), childConstUnions[1][arg1comp].getDConst()));
-                else if (isSigned)
-                    newConstArray[comp].setIConst(std::max(childConstUnions[0][arg0comp].getIConst(), childConstUnions[1][arg1comp].getIConst()));
-                else
-                    newConstArray[comp].setUConst(std::max(childConstUnions[0][arg0comp].getUConst(), childConstUnions[1][arg1comp].getUConst()));
+                else if (isSigned) {
+                    if (isInt64)
+                        newConstArray[comp].setI64Const(std::max(childConstUnions[0][arg0comp].getI64Const(), childConstUnions[1][arg1comp].getI64Const()));
+                    else
+                        newConstArray[comp].setIConst(std::max(childConstUnions[0][arg0comp].getIConst(), childConstUnions[1][arg1comp].getIConst()));
+                } else {
+                    if (isInt64)
+                        newConstArray[comp].setU64Const(std::max(childConstUnions[0][arg0comp].getU64Const(), childConstUnions[1][arg1comp].getU64Const()));
+                    else
+                        newConstArray[comp].setUConst(std::max(childConstUnions[0][arg0comp].getUConst(), childConstUnions[1][arg1comp].getUConst()));
+                }
                 break;
             case EOpClamp:
                 if (isFloatingPoint)
-                    newConstArray[comp].setDConst(std::min(std::max(childConstUnions[0][arg0comp].getDConst(), childConstUnions[1][arg1comp].getDConst()), 
+                    newConstArray[comp].setDConst(std::min(std::max(childConstUnions[0][arg0comp].getDConst(), childConstUnions[1][arg1comp].getDConst()),
                                                                                                                childConstUnions[2][arg2comp].getDConst()));
-                else if (isSigned)
-                    newConstArray[comp].setIConst(std::min(std::max(childConstUnions[0][arg0comp].getIConst(), childConstUnions[1][arg1comp].getIConst()), 
-                                                                                                               childConstUnions[2][arg2comp].getIConst()));
-                else
-                    newConstArray[comp].setUConst(std::min(std::max(childConstUnions[0][arg0comp].getUConst(), childConstUnions[1][arg1comp].getUConst()), 
-                                                                                                               childConstUnions[2][arg2comp].getUConst()));
+                else if (isSigned) {
+                    if (isInt64)
+                        newConstArray[comp].setI64Const(std::min(std::max(childConstUnions[0][arg0comp].getI64Const(), childConstUnions[1][arg1comp].getI64Const()),
+                                                                                                                       childConstUnions[2][arg2comp].getI64Const()));
+                    else
+                        newConstArray[comp].setIConst(std::min(std::max(childConstUnions[0][arg0comp].getIConst(), childConstUnions[1][arg1comp].getIConst()),
+                                                                                                                   childConstUnions[2][arg2comp].getIConst()));
+                } else {
+                    if (isInt64)
+                        newConstArray[comp].setU64Const(std::min(std::max(childConstUnions[0][arg0comp].getU64Const(), childConstUnions[1][arg1comp].getU64Const()),
+                                                                                                                       childConstUnions[2][arg2comp].getU64Const()));
+                    else
+                        newConstArray[comp].setUConst(std::min(std::max(childConstUnions[0][arg0comp].getUConst(), childConstUnions[1][arg1comp].getUConst()),
+                                                                                                                   childConstUnions[2][arg2comp].getUConst()));
+                }
                 break;
             case EOpLessThan:
                 newConstArray[comp].setBConst(childConstUnions[0][arg0comp] < childConstUnions[1][arg1comp]);
@@ -729,7 +839,7 @@ TIntermTyped* TIntermediate::fold(TIntermAggregate* aggrNode)
                 break;
             case EOpSmoothStep:
             {
-                double t = (childConstUnions[2][arg2comp].getDConst() - childConstUnions[0][arg0comp].getDConst()) / 
+                double t = (childConstUnions[2][arg2comp].getDConst() - childConstUnions[0][arg0comp].getDConst()) /
                            (childConstUnions[1][arg1comp].getDConst() - childConstUnions[0][arg0comp].getDConst());
                 if (t < 0.0)
                     t = 0.0;
@@ -768,7 +878,7 @@ TIntermTyped* TIntermediate::fold(TIntermAggregate* aggrNode)
             newConstArray[2] = childConstUnions[0][0] * childConstUnions[1][1] - childConstUnions[0][1] * childConstUnions[1][0];
             break;
         case EOpFaceForward:
-            // If dot(Nref, I) < 0 return N, otherwise return –N:  Arguments are (N, I, Nref).
+            // If dot(Nref, I) < 0 return N, otherwise return -N:  Arguments are (N, I, Nref).
             dot = childConstUnions[1].dot(childConstUnions[2]);
             for (int comp = 0; comp < numComps; ++comp) {
                 if (dot < 0.0)
@@ -895,23 +1005,23 @@ TIntermTyped* TIntermediate::foldDereference(TIntermTyped* node, int index, cons
 }
 
 //
-// Make a constant vector node or constant scalar node, representing a given 
+// Make a constant vector node or constant scalar node, representing a given
 // constant vector and constant swizzle into it.
 //
-TIntermTyped* TIntermediate::foldSwizzle(TIntermTyped* node, TVectorFields& fields, const TSourceLoc& loc)
+TIntermTyped* TIntermediate::foldSwizzle(TIntermTyped* node, TSwizzleSelectors<TVectorSelector>& selectors, const TSourceLoc& loc)
 {
     const TConstUnionArray& unionArray = node->getAsConstantUnion()->getConstArray();
-    TConstUnionArray constArray(fields.num);
+    TConstUnionArray constArray(selectors.size());
 
-    for (int i = 0; i < fields.num; i++)
-        constArray[i] = unionArray[fields.offsets[i]];
+    for (int i = 0; i < selectors.size(); i++)
+        constArray[i] = unionArray[selectors[i]];
 
     TIntermTyped* result = addConstantUnion(constArray, node->getType(), loc);
 
     if (result == 0)
         result = node;
     else
-        result->setType(TType(node->getBasicType(), EvqConst, fields.num));
+        result->setType(TType(node->getBasicType(), EvqConst, selectors.size()));
 
     return result;
 }

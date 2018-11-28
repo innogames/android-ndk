@@ -1,28 +1,16 @@
 // Copyright (c) 2015-2016 The Khronos Group Inc.
 //
-// Permission is hereby granted, free of charge, to any person obtaining a
-// copy of this software and/or associated documentation files (the
-// "Materials"), to deal in the Materials without restriction, including
-// without limitation the rights to use, copy, modify, merge, publish,
-// distribute, sublicense, and/or sell copies of the Materials, and to
-// permit persons to whom the Materials are furnished to do so, subject to
-// the following conditions:
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-// The above copyright notice and this permission notice shall be included
-// in all copies or substantial portions of the Materials.
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
-// MODIFICATIONS TO THIS FILE MAY MEAN IT NO LONGER ACCURATELY REFLECTS
-// KHRONOS STANDARDS. THE UNMODIFIED, NORMATIVE VERSIONS OF KHRONOS
-// SPECIFICATIONS AND HEADER INFORMATION ARE LOCATED AT
-//    https://www.khronos.org/registry/
-//
-// THE MATERIALS ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-// EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
-// IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-// CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
-// TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
-// MATERIALS OR THE USE OR OTHER DEALINGS IN THE MATERIALS.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #include "text.h"
 
@@ -43,6 +31,7 @@
 #include "diagnostic.h"
 #include "ext_inst.h"
 #include "instruction.h"
+#include "message.h"
 #include "opcode.h"
 #include "operand.h"
 #include "spirv-tools/libspirv.h"
@@ -50,6 +39,7 @@
 #include "table.h"
 #include "text_handler.h"
 #include "util/bitutils.h"
+#include "util/parse_number.h"
 
 bool spvIsValidIDCharacter(const char value) {
   return value == '_' || 0 != ::isalnum(value);
@@ -171,10 +161,10 @@ spv_result_t encodeImmediate(libspirv::AssemblyContext* context,
                              const char* text, spv_instruction_t* pInst) {
   assert(*text == '!');
   uint32_t parse_result;
-  if (auto error =
-          context->parseNumber(text + 1, SPV_ERROR_INVALID_TEXT, &parse_result,
-                               "Invalid immediate integer: !"))
-    return error;
+  if (!spvutils::ParseNumber(text + 1, &parse_result)) {
+    return context->diagnostic(SPV_ERROR_INVALID_TEXT)
+           << "Invalid immediate integer: !" << text + 1;
+  }
   context->binaryEncodeU32(parse_result, pInst);
   context->seekForward(static_cast<uint32_t>(strlen(text)));
   return SPV_SUCCESS;
@@ -257,7 +247,7 @@ spv_result_t spvTextEncodeOperand(const libspirv::AssemblyGrammar& grammar,
       spvInstructionAddWord(pInst, extInst->ext_inst);
 
       // Prepare to parse the operands for the extended instructions.
-      spvPrependOperandTypes(extInst->operandTypes, pExpectedOperands);
+      spvPushOperandTypes(extInst->operandTypes, pExpectedOperands);
     } break;
 
     case SPV_OPERAND_TYPE_SPEC_CONSTANT_OP_NUMBER: {
@@ -281,7 +271,7 @@ spv_result_t spvTextEncodeOperand(const libspirv::AssemblyGrammar& grammar,
       assert(opcodeEntry->hasType);
       assert(opcodeEntry->hasResult);
       assert(opcodeEntry->numTypes >= 2);
-      spvPrependOperandTypes(opcodeEntry->operandTypes + 2, pExpectedOperands);
+      spvPushOperandTypes(opcodeEntry->operandTypes + 2, pExpectedOperands);
     } break;
 
     case SPV_OPERAND_TYPE_LITERAL_INTEGER:
@@ -390,7 +380,7 @@ spv_result_t spvTextEncodeOperand(const libspirv::AssemblyGrammar& grammar,
       }
       if (auto error = context->binaryEncodeU32(value, pInst)) return error;
       // Prepare to parse the operands for this logical operand.
-      grammar.prependOperandTypesForMask(type, value, pExpectedOperands);
+      grammar.pushOperandTypesForMask(type, value, pExpectedOperands);
     } break;
     case SPV_OPERAND_TYPE_OPTIONAL_CIV: {
       auto error = spvTextEncodeOperand(
@@ -430,7 +420,7 @@ spv_result_t spvTextEncodeOperand(const libspirv::AssemblyGrammar& grammar,
       }
 
       // Prepare to parse the operands for this logical operand.
-      spvPrependOperandTypes(entry->operandTypes, pExpectedOperands);
+      spvPushOperandTypes(entry->operandTypes, pExpectedOperands);
     } break;
   }
   return SPV_SUCCESS;
@@ -563,13 +553,14 @@ spv_result_t spvTextEncodeOpcode(const libspirv::AssemblyGrammar& grammar,
   // has its own logical operands (such as the LocalSize operand for
   // ExecutionMode), or for extended instructions that may have their
   // own operands depending on the selected extended instruction.
-  spv_operand_pattern_t expectedOperands(
-      opcodeEntry->operandTypes,
-      opcodeEntry->operandTypes + opcodeEntry->numTypes);
+  spv_operand_pattern_t expectedOperands;
+  expectedOperands.reserve(opcodeEntry->numTypes);
+  for (auto i = 0; i < opcodeEntry->numTypes; i++)
+      expectedOperands.push_back(opcodeEntry->operandTypes[opcodeEntry->numTypes - i - 1]);
 
   while (!expectedOperands.empty()) {
-    const spv_operand_type_t type = expectedOperands.front();
-    expectedOperands.pop_front();
+    const spv_operand_type_t type = expectedOperands.back();
+    expectedOperands.pop_back();
 
     // Expand optional tuples lazily.
     if (spvExpandOperandSequenceOnce(type, &expectedOperands)) continue;
@@ -669,23 +660,63 @@ spv_result_t SetHeader(spv_target_env env, const uint32_t bound,
   return SPV_SUCCESS;
 }
 
+// Collects all numeric ids in the module source into |numeric_ids|.
+// This function is essentially a dry-run of spvTextToBinary.
+spv_result_t GetNumericIds(const libspirv::AssemblyGrammar& grammar,
+                           const spvtools::MessageConsumer& consumer,
+                           const spv_text text,
+                           std::set<uint32_t>* numeric_ids) {
+  libspirv::AssemblyContext context(text, consumer);
+
+  if (!text->str) return context.diagnostic() << "Missing assembly text.";
+
+  if (!grammar.isValid()) {
+    return SPV_ERROR_INVALID_TABLE;
+  }
+
+  // Skip past whitespace and comments.
+  context.advance();
+
+  while (context.hasText()) {
+    spv_instruction_t inst;
+
+    if (spvTextEncodeOpcode(grammar, &context, &inst)) {
+      return SPV_ERROR_INVALID_TEXT;
+    }
+
+    if (context.advance()) break;
+  }
+
+  *numeric_ids = context.GetNumericIds();
+  return SPV_SUCCESS;
+}
+
 // Translates a given assembly language module into binary form.
 // If a diagnostic is generated, it is not yet marked as being
 // for a text-based input.
-spv_result_t spvTextToBinaryInternal(const libspirv::AssemblyGrammar& grammar,
-                                     const spv_text text, spv_binary* pBinary,
-                                     spv_diagnostic* pDiagnostic) {
-  if (!pDiagnostic) return SPV_ERROR_INVALID_DIAGNOSTIC;
-  libspirv::AssemblyContext context(text, pDiagnostic);
+spv_result_t spvTextToBinaryInternal(
+    const libspirv::AssemblyGrammar& grammar,
+    const spvtools::MessageConsumer& consumer, const spv_text text,
+    const uint32_t options, spv_binary* pBinary) {
+  // The ids in this set will have the same values both in source and binary.
+  // All other ids will be generated by filling in the gaps.
+  std::set<uint32_t> ids_to_preserve;
+
+  if (options & SPV_TEXT_TO_BINARY_OPTION_PRESERVE_NUMERIC_IDS) {
+    // Collect all numeric ids from the source into ids_to_preserve.
+    const spv_result_t result =
+        GetNumericIds(grammar, consumer, text, &ids_to_preserve);
+    if (result != SPV_SUCCESS) return result;
+  }
+
+  libspirv::AssemblyContext context(text, consumer, std::move(ids_to_preserve));
+
   if (!text->str) return context.diagnostic() << "Missing assembly text.";
 
   if (!grammar.isValid()) {
     return SPV_ERROR_INVALID_TABLE;
   }
   if (!pBinary) return SPV_ERROR_INVALID_POINTER;
-
-  // NOTE: Ensure diagnostic is zero initialised
-  *pDiagnostic = {};
 
   std::vector<spv_instruction_t> instructions;
 
@@ -739,11 +770,26 @@ spv_result_t spvTextToBinary(const spv_const_context context,
                              const char* input_text,
                              const size_t input_text_size, spv_binary* pBinary,
                              spv_diagnostic* pDiagnostic) {
-  spv_text_t text = {input_text, input_text_size};
-  libspirv::AssemblyGrammar grammar(context);
+  return spvTextToBinaryWithOptions(
+      context, input_text, input_text_size, SPV_BINARY_TO_TEXT_OPTION_NONE,
+      pBinary, pDiagnostic);
+}
 
-  spv_result_t result =
-      spvTextToBinaryInternal(grammar, &text, pBinary, pDiagnostic);
+spv_result_t spvTextToBinaryWithOptions(
+    const spv_const_context context, const char* input_text,
+    const size_t input_text_size, const uint32_t options, spv_binary* pBinary,
+    spv_diagnostic* pDiagnostic) {
+  spv_context_t hijack_context = *context;
+  if (pDiagnostic) {
+    *pDiagnostic = nullptr;
+    libspirv::UseDiagnosticAsMessageConsumer(&hijack_context, pDiagnostic);
+  }
+
+  spv_text_t text = {input_text, input_text_size};
+  libspirv::AssemblyGrammar grammar(&hijack_context);
+
+  spv_result_t result = spvTextToBinaryInternal(
+      grammar, hijack_context.consumer, &text, options, pBinary);
   if (pDiagnostic && *pDiagnostic) (*pDiagnostic)->isTextSource = true;
 
   return result;

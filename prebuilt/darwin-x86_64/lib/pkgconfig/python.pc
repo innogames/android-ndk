@@ -1,4 +1,4 @@
-prefix=/Volumes/Android/buildbot/src/android/ndk-r12-release/out/build/buildhost/darwin-x86_64/install/host-tools
+prefix=/buildbot/tmp/buildhost/darwin-x86_64/install/host-tools
 exec_prefix=${prefix}
 libdir=${exec_prefix}/lib
 includedir=${prefix}/include

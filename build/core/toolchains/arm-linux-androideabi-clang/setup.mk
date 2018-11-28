@@ -27,16 +27,10 @@
 # Override the toolchain prefix
 #
 
-LLVM_TOOLCHAIN_PREBUILT_ROOT := $(call get-toolchain-root,llvm)
-LLVM_TOOLCHAIN_PREFIX := $(LLVM_TOOLCHAIN_PREBUILT_ROOT)/bin/
-
 TOOLCHAIN_NAME := arm-linux-androideabi
 BINUTILS_ROOT := $(call get-binutils-root,$(NDK_ROOT),$(TOOLCHAIN_NAME))
 TOOLCHAIN_ROOT := $(call get-toolchain-root,$(TOOLCHAIN_NAME)-4.9)
 TOOLCHAIN_PREFIX := $(TOOLCHAIN_ROOT)/bin/$(TOOLCHAIN_NAME)-
-
-TARGET_CC := $(LLVM_TOOLCHAIN_PREFIX)clang$(HOST_EXEEXT)
-TARGET_CXX := $(LLVM_TOOLCHAIN_PREFIX)clang++$(HOST_EXEEXT)
 
 #
 # CFLAGS and LDFLAGS
@@ -63,7 +57,7 @@ TARGET_LDFLAGS += \
     -no-canonical-prefixes
 
 ifeq ($(TARGET_ARCH_ABI),armeabi-v7a)
-    LLVM_TRIPLE := armv7-none-linux-androideabi
+    LLVM_TRIPLE := armv7-none-linux-androideabi$(APP_PLATFORM_LEVEL)
 
     TARGET_CFLAGS += -target $(LLVM_TRIPLE) \
                      -march=armv7-a \
@@ -75,7 +69,7 @@ ifeq ($(TARGET_ARCH_ABI),armeabi-v7a)
 
     GCCLIB_SUBDIR := armv7-a
 else ifeq ($(TARGET_ARCH_ABI),armeabi)
-    LLVM_TRIPLE := armv5te-none-linux-androideabi
+    LLVM_TRIPLE := armv5te-none-linux-androideabi$(APP_PLATFORM_LEVEL)
 
     TARGET_CFLAGS += -target $(LLVM_TRIPLE) \
                      -march=armv5te \
@@ -88,6 +82,9 @@ else ifeq ($(TARGET_ARCH_ABI),armeabi)
 else
     $(call __ndk_error,Unsupported ABI: $(TARGET_ARCH_ABI))
 endif
+
+# Append the platform level for __attribute__((availability)).
+LLVM_TRIPLE := $(LLVM_TRIPLE)$(APP_PLATFORM_LEVEL)
 
 GCCLIB_ROOT := $(call get-gcclibs-path,$(NDK_ROOT),$(TOOLCHAIN_NAME))
 

@@ -25,6 +25,7 @@
 #include "libshaderc_util/compiler.h"
 #include "libshaderc_util/counting_includer.h"
 #include "libshaderc_util/resources.h"
+#include "libshaderc_util/spirv_tools_wrapper.h"
 #include "libshaderc_util/version_profile.h"
 
 #if (defined(_MSC_VER) && !defined(_CPPUNWIND)) || !defined(__EXCEPTIONS)
@@ -62,28 +63,11 @@ EShLanguage GetForcedStage(shaderc_shader_kind kind) {
     case shaderc_glsl_default_geometry_shader:
     case shaderc_glsl_default_tess_control_shader:
     case shaderc_glsl_default_tess_evaluation_shader:
+    case shaderc_spirv_assembly:
       return EShLangCount;
   }
   assert(0 && "Unhandled shaderc_shader_kind");
   return EShLangCount;
-}
-
-// Converts shaderc_target_env to EShMessages
-EShMessages GetMessageRules(shaderc_target_env target) {
-  EShMessages msgs = EShMsgDefault;
-
-  switch (target) {
-    case shaderc_target_env_opengl_compat:
-      break;
-    case shaderc_target_env_opengl:
-      msgs = EShMsgSpvRules;
-      break;
-    case shaderc_target_env_vulkan:
-      msgs = static_cast<EShMessages>(EShMsgSpvRules | EShMsgVulkanRules);
-      break;
-  }
-
-  return msgs;
 }
 
 // A wrapper functor class to be used as stage deducer for libshaderc_util
@@ -149,6 +133,8 @@ class StageDeducer {
         return EShLangTessControl;
       case shaderc_glsl_default_tess_evaluation_shader:
         return EShLangTessEvaluation;
+      case shaderc_spirv_assembly:
+        return EShLangCount;
     }
     assert(0 && "Unhandled shaderc_shader_kind");
     return EShLangCount;
@@ -173,22 +159,21 @@ class InternalFileIncluder : public shaderc_util::CountingIncluder {
  private:
   // Check the validity of the callbacks.
   bool AreValidCallbacks() const {
-    return resolver_ != nullptr &&
-           result_releaser_ != nullptr;
+    return resolver_ != nullptr && result_releaser_ != nullptr;
   }
 
-  // Maps a shaderc_include_type to the correpsonding Glslang include type.
-  shaderc_include_type GetIncludeType(
-      glslang::TShader::Includer::IncludeType type) {
+  // Maps CountingIncluder IncludeType value to a shaderc_include_type
+  // value.
+  shaderc_include_type GetIncludeType(IncludeType type) {
     switch (type) {
-      case glslang::TShader::Includer::EIncludeRelative:
+      case IncludeType::Local:
         return shaderc_include_type_relative;
-      case glslang::TShader::Includer::EIncludeStandard:
+      case IncludeType::System:
         return shaderc_include_type_standard;
       default:
         break;
     }
-    assert(0 && "Unhandled shaderc_include_type");
+    assert(0 && "Unhandled IncludeType");
     return shaderc_include_type_relative;
   }
 
@@ -200,12 +185,10 @@ class InternalFileIncluder : public shaderc_util::CountingIncluder {
   // resolved name member is an empty string, and the contents members
   // contains error details.
   virtual glslang::TShader::Includer::IncludeResult* include_delegate(
-      const char* requested_source,
-      glslang::TShader::Includer::IncludeType type,
-      const char* requesting_source,
-      size_t include_depth) override {
+      const char* requested_source, const char* requesting_source,
+      IncludeType type, size_t include_depth) override {
     if (!AreValidCallbacks()) {
-      const char kUnexpectedIncludeError[] =
+      static const char kUnexpectedIncludeError[] =
           "#error unexpected include directive";
       return new glslang::TShader::Includer::IncludeResult{
           "", kUnexpectedIncludeError, strlen(kUnexpectedIncludeError),
@@ -229,7 +212,7 @@ class InternalFileIncluder : public shaderc_util::CountingIncluder {
       glslang::TShader::Includer::IncludeResult* result) override {
     if (result && result_releaser_) {
       result_releaser_(user_data_,
-                       static_cast<shaderc_include_result*>(result->user_data));
+                       static_cast<shaderc_include_result*>(result->userData));
     }
     delete result;
   }
@@ -239,14 +222,86 @@ class InternalFileIncluder : public shaderc_util::CountingIncluder {
   void* user_data_;
 };
 
+// Converts the target env to the corresponding one in shaderc_util::Compiler.
+shaderc_util::Compiler::TargetEnv GetCompilerTargetEnv(shaderc_target_env env) {
+  switch (env) {
+    case shaderc_target_env_opengl:
+      return shaderc_util::Compiler::TargetEnv::OpenGL;
+    case shaderc_target_env_opengl_compat:
+      return shaderc_util::Compiler::TargetEnv::OpenGLCompat;
+    case shaderc_target_env_vulkan:
+    default:
+      break;
+  }
+
+  return shaderc_util::Compiler::TargetEnv::Vulkan;
+}
+
+// Returns the Compiler::Limit enum for the given shaderc_limit enum.
+shaderc_util::Compiler::Limit CompilerLimit(shaderc_limit limit) {
+  switch (limit) {
+#define RESOURCE(NAME,FIELD,CNAME) \
+     case shaderc_limit_##CNAME: return shaderc_util::Compiler::Limit::NAME;
+#include "libshaderc_util/resources.inc"
+#undef RESOURCE
+    default:
+      break;
+  }
+  assert(0 && "Should not have reached here");
+  return static_cast<shaderc_util::Compiler::Limit>(0);
+}
+
+// Returns the Compiler::UniformKind for the given shaderc_uniform_kind.
+shaderc_util::Compiler::UniformKind GetUniformKind(shaderc_uniform_kind kind) {
+  switch (kind) {
+    case shaderc_uniform_kind_texture:
+      return shaderc_util::Compiler::UniformKind::Texture;
+    case shaderc_uniform_kind_sampler:
+      return shaderc_util::Compiler::UniformKind::Sampler;
+    case shaderc_uniform_kind_image:
+      return shaderc_util::Compiler::UniformKind::Image;
+    case shaderc_uniform_kind_buffer:
+      return shaderc_util::Compiler::UniformKind::Buffer;
+    case shaderc_uniform_kind_storage_buffer:
+      return shaderc_util::Compiler::UniformKind::StorageBuffer;
+    case shaderc_uniform_kind_unordered_access_view:
+      return shaderc_util::Compiler::UniformKind::UnorderedAccessView;
+  }
+  assert(0 && "Should not have reached here");
+  return static_cast<shaderc_util::Compiler::UniformKind>(0);
+}
+
+// Returns the Compiler::Stage for generic stage values in shaderc_shader_kind.
+shaderc_util::Compiler::Stage GetStage(shaderc_shader_kind kind) {
+  switch (kind) {
+    case shaderc_vertex_shader:
+      return shaderc_util::Compiler::Stage::Vertex;
+    case shaderc_fragment_shader:
+      return shaderc_util::Compiler::Stage::Fragment;
+    case shaderc_compute_shader:
+      return shaderc_util::Compiler::Stage::Compute;
+    case shaderc_tess_control_shader:
+      return shaderc_util::Compiler::Stage::TessControl;
+    case shaderc_tess_evaluation_shader:
+      return shaderc_util::Compiler::Stage::TessEval;
+    case shaderc_geometry_shader:
+      return shaderc_util::Compiler::Stage::Geometry;
+    default:
+      break;
+  }
+  assert(0 && "Should not have reached here");
+  return static_cast<shaderc_util::Compiler::Stage>(0);
+}
+
+
 }  // anonymous namespace
 
 struct shaderc_compile_options {
-  shaderc_compile_options() : include_user_data(nullptr) {}
+  shaderc_target_env target_env = shaderc_target_env_default;
   shaderc_util::Compiler compiler;
-  shaderc_include_resolve_fn include_resolver;
-  shaderc_include_result_release_fn include_result_releaser;
-  void* include_user_data;
+  shaderc_include_resolve_fn include_resolver = nullptr;
+  shaderc_include_result_release_fn include_result_releaser = nullptr;
+  void* include_user_data = nullptr;
 };
 
 shaderc_compile_options_t shaderc_compile_options_initialize() {
@@ -271,11 +326,33 @@ void shaderc_compile_options_add_macro_definition(
   options->compiler.AddMacroDefinition(name, name_length, value, value_length);
 }
 
+void shaderc_compile_options_set_source_language(
+    shaderc_compile_options_t options,
+    shaderc_source_language set_lang) {
+  auto lang = shaderc_util::Compiler::SourceLanguage::GLSL;
+  if (set_lang == shaderc_source_language_hlsl)
+    lang = shaderc_util::Compiler::SourceLanguage::HLSL;
+  options->compiler.SetSourceLanguage(lang);
+}
+
 void shaderc_compile_options_set_generate_debug_info(
     shaderc_compile_options_t options) {
   options->compiler.SetGenerateDebugInfo();
 }
 
+void shaderc_compile_options_set_optimization_level(
+    shaderc_compile_options_t options, shaderc_optimization_level level) {
+  auto opt_level = shaderc_util::Compiler::OptimizationLevel::Zero;
+  switch (level) {
+    case shaderc_optimization_level_size:
+      opt_level = shaderc_util::Compiler::OptimizationLevel::Size;
+      break;
+    default:
+      break;
+  }
+
+  options->compiler.SetOptimizationLevel(opt_level);
+}
 
 void shaderc_compile_options_set_forced_version_profile(
     shaderc_compile_options_t options, int version, shaderc_profile profile) {
@@ -299,15 +376,12 @@ void shaderc_compile_options_set_forced_version_profile(
 }
 
 void shaderc_compile_options_set_include_callbacks(
-    shaderc_compile_options_t options,
-    shaderc_include_resolve_fn resolver,
-    shaderc_include_result_release_fn result_releaser,
-    void* user_data) {
+    shaderc_compile_options_t options, shaderc_include_resolve_fn resolver,
+    shaderc_include_result_release_fn result_releaser, void* user_data) {
   options->include_resolver = resolver;
   options->include_result_releaser = result_releaser;
   options->include_user_data = user_data;
 }
-
 
 void shaderc_compile_options_set_suppress_warnings(
     shaderc_compile_options_t options) {
@@ -319,7 +393,8 @@ void shaderc_compile_options_set_target_env(shaderc_compile_options_t options,
                                             uint32_t version) {
   // "version" reserved for future use, intended to distinguish between
   // different versions of a target environment
-  options->compiler.SetMessageRules(GetMessageRules(target));
+  options->target_env = target;
+  options->compiler.SetTargetEnv(GetCompilerTargetEnv(target));
 }
 
 void shaderc_compile_options_set_warnings_as_errors(
@@ -327,9 +402,55 @@ void shaderc_compile_options_set_warnings_as_errors(
   options->compiler.SetWarningsAsErrors();
 }
 
+void shaderc_compile_options_set_limit(
+    shaderc_compile_options_t options, shaderc_limit limit, int value) {
+  options->compiler.SetLimit(CompilerLimit(limit), value);
+}
+
+void shaderc_compile_options_set_auto_bind_uniforms(
+    shaderc_compile_options_t options, bool auto_bind) {
+  options->compiler.SetAutoBindUniforms(auto_bind);
+}
+
+void shaderc_compile_options_set_hlsl_io_mapping(
+    shaderc_compile_options_t options, bool hlsl_iomap) {
+  options->compiler.SetHlslIoMapping(hlsl_iomap);
+}
+
+void shaderc_compile_options_set_hlsl_offsets(
+    shaderc_compile_options_t options, bool hlsl_offsets) {
+  options->compiler.SetHlslOffsets(hlsl_offsets);
+}
+
+void shaderc_compile_options_set_binding_base(shaderc_compile_options_t options,
+                                              shaderc_uniform_kind kind,
+                                              uint32_t base) {
+  options->compiler.SetAutoBindingBase(GetUniformKind(kind), base);
+}
+
+void shaderc_compile_options_set_binding_base_for_stage(
+    shaderc_compile_options_t options, shaderc_shader_kind shader_kind,
+    shaderc_uniform_kind kind, uint32_t base) {
+  options->compiler.SetAutoBindingBaseForStage(GetStage(shader_kind),
+                                               GetUniformKind(kind), base);
+}
+
+void shaderc_compile_options_set_hlsl_register_set_and_binding_for_stage(
+    shaderc_compile_options_t options, shaderc_shader_kind shader_kind,
+    const char* reg, const char* set, const char* binding) {
+  options->compiler.SetHlslRegisterSetAndBindingForStage(GetStage(shader_kind),
+                                                         reg, set, binding);
+}
+
+void shaderc_compile_options_set_hlsl_register_set_and_binding(
+    shaderc_compile_options_t options, const char* reg, const char* set,
+    const char* binding) {
+  options->compiler.SetHlslRegisterSetAndBinding(reg, set, binding);
+}
+
 shaderc_compiler_t shaderc_compiler_initialize() {
-  static shaderc_util::GlslInitializer* initializer =
-      new shaderc_util::GlslInitializer;
+  static shaderc_util::GlslangInitializer* initializer =
+      new shaderc_util::GlslangInitializer;
   shaderc_compiler_t compiler = new (std::nothrow) shaderc_compiler;
   compiler->initializer = initializer;
   return compiler;
@@ -344,10 +465,14 @@ shaderc_compilation_result_t CompileToSpecifiedOutputType(
     const char* input_file_name, const char* entry_point_name,
     const shaderc_compile_options_t additional_options,
     shaderc_util::Compiler::OutputType output_type) {
-  shaderc_compilation_result_t result =
-      new (std::nothrow) shaderc_compilation_result;
-  if (!result) {
-    return nullptr;
+  auto* result = new (std::nothrow) shaderc_compilation_result_vector;
+  if (!result) return nullptr;
+
+  if (!input_file_name) {
+    result->messages = "Input file name string was null.";
+    result->num_errors = 1;
+    result->compilation_status = shaderc_compilation_status_compilation_error;
+    return result;
   }
   result->compilation_status = shaderc_compilation_status_invalid_stage;
   bool compilation_succeeded = false;  // In case we exit early.
@@ -364,35 +489,32 @@ shaderc_compilation_result_t CompileToSpecifiedOutputType(
         shaderc_util::string_piece(source_text, source_text + source_text_size);
     StageDeducer stage_deducer(shader_kind);
     if (additional_options) {
-      InternalFileIncluder includer(
-                  additional_options->include_resolver,
-                  additional_options->include_result_releaser,
-                  additional_options->include_user_data);
+      InternalFileIncluder includer(additional_options->include_resolver,
+                                    additional_options->include_result_releaser,
+                                    additional_options->include_user_data);
       // Depends on return value optimization to avoid extra copy.
       std::tie(compilation_succeeded, compilation_output_data,
                compilation_output_data_size_in_bytes) =
           additional_options->compiler.Compile(
-              source_string, forced_stage, input_file_name_str,
+              source_string, forced_stage, input_file_name_str, entry_point_name,
               // stage_deducer has a flag: error_, which we need to check later.
               // We need to make this a reference wrapper, so that std::function
               // won't make a copy for this callable object.
-              std::ref(stage_deducer),
-              includer,
-              output_type, &errors, &total_warnings, &total_errors,
-              compiler->initializer);
+              std::ref(stage_deducer), includer, output_type, &errors,
+              &total_warnings, &total_errors, compiler->initializer);
     } else {
       // Compile with default options.
       InternalFileIncluder includer;
       std::tie(compilation_succeeded, compilation_output_data,
                compilation_output_data_size_in_bytes) =
           shaderc_util::Compiler().Compile(
-              source_string, forced_stage, input_file_name_str,
-              std::ref(stage_deducer), includer, output_type,
-              &errors, &total_warnings, &total_errors, compiler->initializer);
+              source_string, forced_stage, input_file_name_str, entry_point_name,
+              std::ref(stage_deducer), includer, output_type, &errors,
+              &total_warnings, &total_errors, compiler->initializer);
     }
 
     result->messages = errors.str();
-    result->output_data = std::move(compilation_output_data);
+    result->SetOutputData(std::move(compilation_output_data));
     result->output_data_size = compilation_output_data_size_in_bytes;
     result->num_warnings = total_warnings;
     result->num_errors = total_errors;
@@ -447,6 +569,43 @@ shaderc_compilation_result_t shaderc_compile_into_preprocessed_text(
       shaderc_util::Compiler::OutputType::PreprocessedText);
 }
 
+shaderc_compilation_result_t shaderc_assemble_into_spv(
+    const shaderc_compiler_t compiler, const char* source_assembly,
+    size_t source_assembly_size,
+    const shaderc_compile_options_t additional_options) {
+  auto* result = new (std::nothrow) shaderc_compilation_result_spv_binary;
+  if (!result) return nullptr;
+  result->compilation_status = shaderc_compilation_status_invalid_assembly;
+  if (!compiler->initializer) return result;
+  if (source_assembly == nullptr) return result;
+
+  TRY_IF_EXCEPTIONS_ENABLED {
+    spv_binary assembling_output_data = nullptr;
+    std::string errors;
+    const auto target_env = additional_options ? additional_options->target_env
+                                               : shaderc_target_env_default;
+    const bool assembling_succeeded = shaderc_util::SpirvToolsAssemble(
+        GetCompilerTargetEnv(target_env),
+        {source_assembly, source_assembly + source_assembly_size},
+        &assembling_output_data, &errors);
+    result->num_errors = !assembling_succeeded;
+    if (assembling_succeeded) {
+      result->SetOutputData(assembling_output_data);
+      result->output_data_size =
+          assembling_output_data->wordCount * sizeof(uint32_t);
+      result->compilation_status = shaderc_compilation_status_success;
+    } else {
+      result->messages = std::move(errors);
+      result->compilation_status = shaderc_compilation_status_invalid_assembly;
+    }
+  }
+  CATCH_IF_EXCEPTIONS_ENABLED(...) {
+    result->compilation_status = shaderc_compilation_status_internal_error;
+  }
+
+  return result;
+}
+
 size_t shaderc_result_get_length(const shaderc_compilation_result_t result) {
   return result->output_data_size;
 }
@@ -463,7 +622,7 @@ size_t shaderc_result_get_num_errors(
 
 const char* shaderc_result_get_bytes(
     const shaderc_compilation_result_t result) {
-  return reinterpret_cast<const char*>(result->output_data.data());
+  return result->GetBytes();
 }
 
 void shaderc_result_release(shaderc_compilation_result_t result) {

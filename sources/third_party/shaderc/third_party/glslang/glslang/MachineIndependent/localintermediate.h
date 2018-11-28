@@ -1,10 +1,11 @@
 //
-//Copyright (C) 2002-2005  3Dlabs Inc. Ltd.
-//All rights reserved.
+// Copyright (C) 2002-2005  3Dlabs Inc. Ltd.
+// Copyright (C) 2016 LunarG, Inc.
+// All rights reserved.
 //
-//Redistribution and use in source and binary forms, with or without
-//modification, are permitted provided that the following conditions
-//are met:
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions
+// are met:
 //
 //    Redistributions of source code must retain the above copyright
 //    notice, this list of conditions and the following disclaimer.
@@ -18,18 +19,18 @@
 //    contributors may be used to endorse or promote products derived
 //    from this software without specific prior written permission.
 //
-//THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-//"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-//LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
-//FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
-//COPYRIGHT HOLDERS OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
-//INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
-//BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
-//LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-//CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
-//LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
-//ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-//POSSIBILITY OF SUCH DAMAGE.
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
+// FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
+// COPYRIGHT HOLDERS OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
+// INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
+// BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+// LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+// CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+// LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
+// ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+// POSSIBILITY OF SUCH DAMAGE.
 //
 
 #ifndef _LOCAL_INTERMEDIATE_INCLUDED_
@@ -46,9 +47,40 @@ class TInfoSink;
 
 namespace glslang {
 
-struct TVectorFields {
-    int offsets[4];
-    int num;
+struct TMatrixSelector {
+    int coord1;  // stay agnostic about column/row; this is parse order
+    int coord2;
+};
+
+typedef int TVectorSelector;
+
+const int MaxSwizzleSelectors = 4;
+
+template<typename selectorType>
+class TSwizzleSelectors {
+public:
+    TSwizzleSelectors() : size_(0) { }
+
+    void push_back(selectorType comp)
+    {
+        if (size_ < MaxSwizzleSelectors)
+            components[size_++] = comp;
+    }
+    void resize(int s)
+    {
+        assert(s <= size_);
+        size_ = s;
+    }
+    int size() const { return size_; }
+    selectorType operator[](int i) const
+    {
+        assert(i < MaxSwizzleSelectors);
+        return components[i];
+    }
+    
+private:
+    int size_;
+    selectorType components[MaxSwizzleSelectors];
 };
 
 //
@@ -56,7 +88,9 @@ struct TVectorFields {
 // by TIntermediate.
 //
 
-// Used for detecting recursion:  A "call" is a pair: <caller, callee>.
+// Used for call-graph algorithms for detecting recursion, missing bodies, and dead bodies.
+// A "call" is a pair: <caller, callee>.
+// There can be duplicates. General assumption is the list is small.
 struct TCall {
     TCall(const TString& pCaller, const TString& pCallee) : caller(pCaller), callee(pCallee) { }
     TString caller;
@@ -64,12 +98,13 @@ struct TCall {
     bool visited;
     bool currentPath;
     bool errorGiven;
+    int calleeBodyPosition;
 };
 
 // A generic 1-D range.
 struct TRange {
     TRange(int start, int last) : start(start), last(last) { }
-    bool overlap(const TRange& rhs) const 
+    bool overlap(const TRange& rhs) const
     {
         return last >= rhs.start && start <= rhs.last;
     }
@@ -115,6 +150,54 @@ struct TXfbBuffer {
     bool containsDouble;
 };
 
+// Track a set of strings describing how the module was processed.
+// Using the form:
+//   process arg0 arg1 arg2 ...
+//   process arg0 arg1 arg2 ...
+// where everything is textual, and there can be zero or more arguments
+class TProcesses {
+public:
+    TProcesses() {}
+    ~TProcesses() {}
+
+    void addProcess(const char* process)
+    {
+        processes.push_back(process);
+    }
+    void addProcess(const std::string& process)
+    {
+        processes.push_back(process);
+    }
+    void addArgument(int arg)
+    {
+        processes.back().append(" ");
+        std::string argString = std::to_string(arg);
+        processes.back().append(argString);
+    }
+    void addArgument(const char* arg)
+    {
+        processes.back().append(" ");
+        processes.back().append(arg);
+    }
+    void addArgument(const std::string& arg)
+    {
+        processes.back().append(" ");
+        processes.back().append(arg);
+    }
+    void addIfNonZero(const char* process, int value)
+    {
+        if (value != 0) {
+            addProcess(process);
+            addArgument(value);
+        }
+    }
+
+    const std::vector<std::string>& getProcesses() const { return processes; }
+
+private:
+    std::vector<std::string> processes;
+};
+
 class TSymbolTable;
 class TSymbol;
 class TVariable;
@@ -125,12 +208,33 @@ class TVariable;
 class TIntermediate {
 public:
     explicit TIntermediate(EShLanguage l, int v = 0, EProfile p = ENoProfile) :
-        source(EShSourceNone), language(l), profile(p), version(v), spv(0), treeRoot(0),
-        numMains(0), numErrors(0), numPushConstants(0), recursive(false),
-        invocations(TQualifier::layoutNotSet), vertices(TQualifier::layoutNotSet), inputPrimitive(ElgNone), outputPrimitive(ElgNone),
+        implicitThisName("@this"),
+        language(l), source(EShSourceNone), profile(p), version(v), treeRoot(0),
+        numEntryPoints(0), numErrors(0), numPushConstants(0), recursive(false),
+        invocations(TQualifier::layoutNotSet), vertices(TQualifier::layoutNotSet),
+        inputPrimitive(ElgNone), outputPrimitive(ElgNone),
         pixelCenterInteger(false), originUpperLeft(false),
-        vertexSpacing(EvsNone), vertexOrder(EvoNone), pointMode(false), earlyFragmentTests(false), depthLayout(EldNone), depthReplacing(false), blendEquations(0),
-        multiStream(false), xfbMode(false)
+        vertexSpacing(EvsNone), vertexOrder(EvoNone), pointMode(false), earlyFragmentTests(false),
+        postDepthCoverage(false), depthLayout(EldNone), depthReplacing(false),
+        blendEquations(0), xfbMode(false), multiStream(false),
+#ifdef NV_EXTENSIONS
+        layoutOverrideCoverage(false),
+        geoPassthroughEXT(false),
+#endif
+        shiftSamplerBinding(0),
+        shiftTextureBinding(0),
+        shiftImageBinding(0),
+        shiftUboBinding(0),
+        shiftSsboBinding(0),
+        shiftUavBinding(0),
+        autoMapBindings(false),
+        autoMapLocations(false),
+        flattenUniformArrays(false),
+        useUnknownFormat(false),
+        hlslOffsets(false),
+        useStorageBuffer(false),
+        hlslIoMapping(false),
+        textureSamplerTransformMode(EShTexSampTransKeep)
     {
         localSize[0] = 1;
         localSize[1] = 1;
@@ -148,22 +252,144 @@ public:
 
     void setSource(EShSource s) { source = s; }
     EShSource getSource() const { return source; }
-    void setEntryPoint(const char* ep) { entryPoint = ep; }
-    const std::string& getEntryPoint() const { return entryPoint; }
+    void setEntryPointName(const char* ep)
+    {
+        entryPointName = ep;
+        processes.addProcess("entry-point");
+        processes.addArgument(entryPointName);
+    }
+    void setEntryPointMangledName(const char* ep) { entryPointMangledName = ep; }
+    const std::string& getEntryPointName() const { return entryPointName; }
+    const std::string& getEntryPointMangledName() const { return entryPointMangledName; }
+
+    void setShiftSamplerBinding(unsigned int shift)
+    {
+        shiftSamplerBinding = shift;
+        processes.addIfNonZero("shift-sampler-binding", shift);
+    }
+    unsigned int getShiftSamplerBinding() const { return shiftSamplerBinding; }
+    void setShiftTextureBinding(unsigned int shift)
+    {
+        shiftTextureBinding = shift;
+        processes.addIfNonZero("shift-texture-binding", shift);
+    }
+    unsigned int getShiftTextureBinding() const { return shiftTextureBinding; }
+    void setShiftImageBinding(unsigned int shift)
+    {
+        shiftImageBinding = shift;
+        processes.addIfNonZero("shift-image-binding", shift);
+    }
+    unsigned int getShiftImageBinding() const { return shiftImageBinding; }
+    void setShiftUboBinding(unsigned int shift)
+    {
+        shiftUboBinding = shift;
+        processes.addIfNonZero("shift-UBO-binding", shift);
+    }
+    unsigned int getShiftUboBinding() const { return shiftUboBinding; }
+    void setShiftSsboBinding(unsigned int shift)
+    {
+        shiftSsboBinding = shift;
+        processes.addIfNonZero("shift-ssbo-binding", shift);
+    }
+    unsigned int getShiftSsboBinding() const { return shiftSsboBinding; }
+    void setShiftUavBinding(unsigned int shift)
+    {
+        shiftUavBinding = shift;
+        processes.addIfNonZero("shift-uav-binding", shift);
+    }
+    unsigned int getShiftUavBinding() const { return shiftUavBinding; }
+    void setResourceSetBinding(const std::vector<std::string>& shift)
+    {
+        resourceSetBinding = shift;
+        if (shift.size() > 0) {
+            processes.addProcess("resource-set-binding");
+            for (int s = 0; s < (int)shift.size(); ++s)
+                processes.addArgument(shift[s]);
+        }
+    }
+    const std::vector<std::string>& getResourceSetBinding() const { return resourceSetBinding; }
+    void setAutoMapBindings(bool map)
+    {
+        autoMapBindings = map;
+        if (autoMapBindings)
+            processes.addProcess("auto-map-bindings");
+    }
+    bool getAutoMapBindings() const { return autoMapBindings; }
+    void setAutoMapLocations(bool map)
+    {
+        autoMapLocations = map;
+        if (autoMapLocations)
+            processes.addProcess("auto-map-locations");
+    }
+    bool getAutoMapLocations() const { return autoMapLocations; }
+    void setFlattenUniformArrays(bool flatten)
+    {
+        flattenUniformArrays = flatten;
+        if (flattenUniformArrays)
+            processes.addProcess("flatten-uniform-arrays");
+    }
+    bool getFlattenUniformArrays() const { return flattenUniformArrays; }
+    void setNoStorageFormat(bool b)
+    {
+        useUnknownFormat = b;
+        if (useUnknownFormat)
+            processes.addProcess("no-storage-format");
+    }
+    bool getNoStorageFormat() const { return useUnknownFormat; }
+    void setHlslOffsets()
+    {
+        hlslOffsets = true;
+        if (hlslOffsets)
+            processes.addProcess("hlsl-offsets");
+    }
+    bool usingHlslOFfsets() const { return hlslOffsets; }
+    void setUseStorageBuffer()
+    {
+        useStorageBuffer = true;
+        processes.addProcess("use-storage-buffer");
+    }
+    bool usingStorageBuffer() const { return useStorageBuffer; }
+    void setHlslIoMapping(bool b)
+    {
+        hlslIoMapping = b;
+        if (hlslIoMapping)
+            processes.addProcess("hlsl-iomap");
+    }
+    bool usingHlslIoMapping() { return hlslIoMapping; }
+
+    void setTextureSamplerTransformMode(EShTextureSamplerTransformMode mode) { textureSamplerTransformMode = mode; }
+
     void setVersion(int v) { version = v; }
     int getVersion() const { return version; }
     void setProfile(EProfile p) { profile = p; }
     EProfile getProfile() const { return profile; }
-    void setSpv(int s) { spv = s; }
-    int getSpv() const { return spv; }
+    void setSpv(const SpvVersion& s)
+    {
+        spvVersion = s;
+
+        // client processes
+        if (spvVersion.vulkan > 0)
+            processes.addProcess("client vulkan100");
+        if (spvVersion.openGl > 0)
+            processes.addProcess("client opengl100");
+
+        // target-environment processes
+        if (spvVersion.vulkan == 100)
+            processes.addProcess("target-env vulkan1.0");
+        else if (spvVersion.vulkan > 0)
+            processes.addProcess("target-env vulkanUnknown");
+        if (spvVersion.openGl > 0)
+            processes.addProcess("target-env opengl");
+    }
+    const SpvVersion& getSpv() const { return spvVersion; }
     EShLanguage getStage() const { return language; }
     void addRequestedExtension(const char* extension) { requestedExtensions.insert(extension); }
     const std::set<std::string>& getRequestedExtensions() const { return requestedExtensions; }
 
     void setTreeRoot(TIntermNode* r) { treeRoot = r; }
     TIntermNode* getTreeRoot() const { return treeRoot; }
-    void addMainCount() { ++numMains; }
-    int getNumMains() const { return numMains; }
+    void incrementEntryPointCount() { ++numEntryPoints; }
+    int getNumEntryPoints() const { return numEntryPoints; }
     int getNumErrors() const { return numErrors; }
     void addPushConstantCount() { ++numPushConstants; }
     bool isRecursive() const { return recursive; }
@@ -171,50 +397,74 @@ public:
     TIntermSymbol* addSymbol(const TVariable&);
     TIntermSymbol* addSymbol(const TVariable&, const TSourceLoc&);
     TIntermSymbol* addSymbol(const TType&, const TSourceLoc&);
+    TIntermSymbol* addSymbol(const TIntermSymbol&);
     TIntermTyped* addConversion(TOperator, const TType&, TIntermTyped*) const;
+    TIntermTyped* addUniShapeConversion(TOperator, const TType&, TIntermTyped*);
+    void addBiShapeConversion(TOperator, TIntermTyped*& lhsNode, TIntermTyped*& rhsNode);
+    TIntermTyped* addShapeConversion(const TType&, TIntermTyped*);
     TIntermTyped* addBinaryMath(TOperator, TIntermTyped* left, TIntermTyped* right, TSourceLoc);
     TIntermTyped* addAssign(TOperator op, TIntermTyped* left, TIntermTyped* right, TSourceLoc);
     TIntermTyped* addIndex(TOperator op, TIntermTyped* base, TIntermTyped* index, TSourceLoc);
     TIntermTyped* addUnaryMath(TOperator, TIntermTyped* child, TSourceLoc);
     TIntermTyped* addBuiltInFunctionCall(const TSourceLoc& line, TOperator, bool unary, TIntermNode*, const TType& returnType);
-    bool canImplicitlyPromote(TBasicType from, TBasicType to) const;
+    bool canImplicitlyPromote(TBasicType from, TBasicType to, TOperator op = EOpNull) const;
+    TOperator mapTypeToConstructorOp(const TType&) const;
     TIntermAggregate* growAggregate(TIntermNode* left, TIntermNode* right);
     TIntermAggregate* growAggregate(TIntermNode* left, TIntermNode* right, const TSourceLoc&);
     TIntermAggregate* makeAggregate(TIntermNode* node);
     TIntermAggregate* makeAggregate(TIntermNode* node, const TSourceLoc&);
+    TIntermAggregate* makeAggregate(const TSourceLoc&);
     TIntermTyped* setAggregateOperator(TIntermNode*, TOperator, const TType& type, TSourceLoc);
     bool areAllChildConst(TIntermAggregate* aggrNode);
-    TIntermNode*  addSelection(TIntermTyped* cond, TIntermNodePair code, const TSourceLoc&);
-    TIntermTyped* addSelection(TIntermTyped* cond, TIntermTyped* trueBlock, TIntermTyped* falseBlock, const TSourceLoc&);
+    TIntermTyped* addSelection(TIntermTyped* cond, TIntermNodePair code, const TSourceLoc&, TSelectionControl = ESelectionControlNone);
+    TIntermTyped* addSelection(TIntermTyped* cond, TIntermTyped* trueBlock, TIntermTyped* falseBlock, const TSourceLoc&, TSelectionControl = ESelectionControlNone);
     TIntermTyped* addComma(TIntermTyped* left, TIntermTyped* right, const TSourceLoc&);
     TIntermTyped* addMethod(TIntermTyped*, const TType&, const TString*, const TSourceLoc&);
     TIntermConstantUnion* addConstantUnion(const TConstUnionArray&, const TType&, const TSourceLoc&, bool literal = false) const;
     TIntermConstantUnion* addConstantUnion(int, const TSourceLoc&, bool literal = false) const;
     TIntermConstantUnion* addConstantUnion(unsigned int, const TSourceLoc&, bool literal = false) const;
+    TIntermConstantUnion* addConstantUnion(long long, const TSourceLoc&, bool literal = false) const;
+    TIntermConstantUnion* addConstantUnion(unsigned long long, const TSourceLoc&, bool literal = false) const;
+#ifdef AMD_EXTENSIONS
+    TIntermConstantUnion* addConstantUnion(short, const TSourceLoc&, bool literal = false) const;
+    TIntermConstantUnion* addConstantUnion(unsigned short, const TSourceLoc&, bool literal = false) const;
+    
+#endif
     TIntermConstantUnion* addConstantUnion(bool, const TSourceLoc&, bool literal = false) const;
     TIntermConstantUnion* addConstantUnion(double, TBasicType, const TSourceLoc&, bool literal = false) const;
+    TIntermConstantUnion* addConstantUnion(const TString*, const TSourceLoc&, bool literal = false) const;
     TIntermTyped* promoteConstantUnion(TBasicType, TIntermConstantUnion*) const;
     bool parseConstTree(TIntermNode*, TConstUnionArray, TOperator, const TType&, bool singleConstantParam = false);
-    TIntermLoop* addLoop(TIntermNode*, TIntermTyped*, TIntermTyped*, bool testFirst, const TSourceLoc&);
+    TIntermLoop* addLoop(TIntermNode*, TIntermTyped*, TIntermTyped*, bool testFirst, const TSourceLoc&, TLoopControl = ELoopControlNone);
+    TIntermAggregate* addForLoop(TIntermNode*, TIntermNode*, TIntermTyped*, TIntermTyped*, bool testFirst, const TSourceLoc&, TLoopControl = ELoopControlNone);
     TIntermBranch* addBranch(TOperator, const TSourceLoc&);
     TIntermBranch* addBranch(TOperator, TIntermTyped*, const TSourceLoc&);
-    TIntermTyped* addSwizzle(TVectorFields&, const TSourceLoc&);
+    template<typename selectorType> TIntermTyped* addSwizzle(TSwizzleSelectors<selectorType>&, const TSourceLoc&);
+
+    // Low level functions to add nodes (no conversions or other higher level transformations)
+    // If a type is provided, the node's type will be set to it.
+    TIntermBinary* addBinaryNode(TOperator op, TIntermTyped* left, TIntermTyped* right, TSourceLoc) const;
+    TIntermBinary* addBinaryNode(TOperator op, TIntermTyped* left, TIntermTyped* right, TSourceLoc, const TType&) const;
+    TIntermUnary* addUnaryNode(TOperator op, TIntermTyped* child, TSourceLoc) const;
+    TIntermUnary* addUnaryNode(TOperator op, TIntermTyped* child, TSourceLoc, const TType&) const;
+
+    // Add conversion from node's type to given basic type.
+    TIntermTyped* convertToBasicType(TOperator op, TBasicType basicType, TIntermTyped* node) const;
 
     // Constant folding (in Constant.cpp)
     TIntermTyped* fold(TIntermAggregate* aggrNode);
     TIntermTyped* foldConstructor(TIntermAggregate* aggrNode);
     TIntermTyped* foldDereference(TIntermTyped* node, int index, const TSourceLoc&);
-    TIntermTyped* foldSwizzle(TIntermTyped* node, TVectorFields& fields, const TSourceLoc&);
+    TIntermTyped* foldSwizzle(TIntermTyped* node, TSwizzleSelectors<TVectorSelector>& fields, const TSourceLoc&);
 
     // Tree ops
     static const TIntermTyped* findLValueBase(const TIntermTyped*, bool swizzleOkay);
 
     // Linkage related
     void addSymbolLinkageNodes(TIntermAggregate*& linkage, EShLanguage, TSymbolTable&);
-    void addSymbolLinkageNode(TIntermAggregate*& linkage, TSymbolTable&, const TString&);
     void addSymbolLinkageNode(TIntermAggregate*& linkage, const TSymbol&);
 
-    bool setInvocations(int i) 
+    bool setInvocations(int i)
     {
         if (invocations != TQualifier::layoutNotSet)
             return invocations == i;
@@ -256,7 +506,7 @@ public:
     TVertexOrder getVertexOrder() const { return vertexOrder; }
     void setPointMode() { pointMode = true; }
     bool getPointMode() const { return pointMode; }
-    
+
     bool setLocalSize(int dim, int size)
     {
         if (localSize[dim] > 1)
@@ -293,6 +543,8 @@ public:
     bool getPixelCenterInteger() const { return pixelCenterInteger; }
     void setEarlyFragmentTests() { earlyFragmentTests = true; }
     bool getEarlyFragmentTests() const { return earlyFragmentTests; }
+    void setPostDepthCoverage() { postDepthCoverage = true; }
+    bool getPostDepthCoverage() const { return postDepthCoverage; }
     bool setDepth(TLayoutDepth d)
     {
         if (depthLayout != EldNone)
@@ -309,12 +561,13 @@ public:
 
     void addToCallGraph(TInfoSink&, const TString& caller, const TString& callee);
     void merge(TInfoSink&, TIntermediate&);
-    void finalCheck(TInfoSink&);
+    void finalCheck(TInfoSink&, bool keepUncalled);
 
     void addIoAccessed(const TString& name) { ioAccessed.insert(name); }
     bool inIoAccessed(const TString& name) const { return ioAccessed.find(name) != ioAccessed.end(); }
 
     int addUsedLocation(const TQualifier&, const TType&, bool& typeCollision);
+    int checkLocationRange(int set, const TIoRange& range, const TType&, bool& typeCollision);
     int addUsedOffsets(int binding, int offset, int numOffsets);
     bool addUsedConstantId(int id);
     int computeTypeLocationSize(const TType&) const;
@@ -328,33 +581,72 @@ public:
     }
     int addXfbBufferOffset(const TType&);
     unsigned int computeTypeXfbSize(const TType&, bool& containsDouble) const;
+    static int getBaseAlignmentScalar(const TType&, int& size);
     static int getBaseAlignment(const TType&, int& size, int& stride, bool std140, bool rowMajor);
+    static bool improperStraddle(const TType& type, int size, int offset);
+    bool promote(TIntermOperator*);
+
+#ifdef NV_EXTENSIONS
+    void setLayoutOverrideCoverage() { layoutOverrideCoverage = true; }
+    bool getLayoutOverrideCoverage() const { return layoutOverrideCoverage; }
+    void setGeoPassthroughEXT() { geoPassthroughEXT = true; }
+    bool getGeoPassthroughEXT() const { return geoPassthroughEXT; }
+#endif
+
+    const char* addSemanticName(const TString& name)
+    {
+        return semanticNameSet.insert(name).first->c_str();
+    }
+
+    void setSourceFile(const char* file) { sourceFile = file; }
+    const std::string& getSourceFile() const { return sourceFile; }
+    void addSourceText(const char* text) { sourceText = sourceText + text; }
+    const std::string& getSourceText() const { return sourceText; }
+    void addProcesses(const std::vector<std::string>& p) {
+        for (int i = 0; i < (int)p.size(); ++i)
+            processes.addProcess(p[i]);
+    }
+    void addProcess(const std::string& process) { processes.addProcess(process); }
+    void addProcessArgument(const std::string& arg) { processes.addArgument(arg); }
+    const std::vector<std::string>& getProcesses() const { return processes.getProcesses(); }
+
+    const char* const implicitThisName;
 
 protected:
     TIntermSymbol* addSymbol(int Id, const TString&, const TType&, const TConstUnionArray&, TIntermTyped* subtree, const TSourceLoc&);
     void error(TInfoSink& infoSink, const char*);
+    void warn(TInfoSink& infoSink, const char*);
     void mergeBodies(TInfoSink&, TIntermSequence& globals, const TIntermSequence& unitGlobals);
     void mergeLinkerObjects(TInfoSink&, TIntermSequence& linkerObjects, const TIntermSequence& unitLinkerObjects);
     void mergeImplicitArraySizes(TType&, const TType&);
     void mergeErrorCheck(TInfoSink&, const TIntermSymbol&, const TIntermSymbol&, bool crossStage);
     void checkCallGraphCycles(TInfoSink&);
+    void checkCallGraphBodies(TInfoSink&, bool keepUncalled);
     void inOutLocationCheck(TInfoSink&);
     TIntermSequence& findLinkerObjects() const;
     bool userOutputUsed() const;
-    static int getBaseAlignmentScalar(const TType&, int& size);
     bool isSpecializationOperation(const TIntermOperator&) const;
-
+    bool promoteUnary(TIntermUnary&);
+    bool promoteBinary(TIntermBinary&);
+    void addSymbolLinkageNode(TIntermAggregate*& linkage, TSymbolTable&, const TString&);
+    bool promoteAggregate(TIntermAggregate&);
+    void pushSelector(TIntermSequence&, const TVectorSelector&, const TSourceLoc&);
+    void pushSelector(TIntermSequence&, const TMatrixSelector&, const TSourceLoc&);
+    bool specConstantPropagates(const TIntermTyped&, const TIntermTyped&);
+    void performTextureUpgradeAndSamplerRemovalTransformation(TIntermNode* root);
 
     const EShLanguage language;  // stage, known at construction time
     EShSource source;            // source language, known a bit later
-    std::string entryPoint;
+    std::string entryPointName;
+    std::string entryPointMangledName;
+
     EProfile profile;
     int version;
-    int spv;
+    SpvVersion spvVersion;
     TIntermNode* treeRoot;
     std::set<std::string> requestedExtensions;  // cumulation of all enabled or required extensions; not connected to what subset of the shader used them
     TBuiltInResource resources;
-    int numMains;
+    int numEntryPoints;
     int numErrors;
     int numPushConstants;
     bool recursive;
@@ -370,11 +662,32 @@ protected:
     int localSize[3];
     int localSizeSpecId[3];
     bool earlyFragmentTests;
+    bool postDepthCoverage;
     TLayoutDepth depthLayout;
     bool depthReplacing;
     int blendEquations;        // an 'or'ing of masks of shifts of TBlendEquationShift
     bool xfbMode;
     bool multiStream;
+
+#ifdef NV_EXTENSIONS
+    bool layoutOverrideCoverage;
+    bool geoPassthroughEXT;
+#endif
+
+    unsigned int shiftSamplerBinding;
+    unsigned int shiftTextureBinding;
+    unsigned int shiftImageBinding;
+    unsigned int shiftUboBinding;
+    unsigned int shiftSsboBinding;
+    unsigned int shiftUavBinding;
+    std::vector<std::string> resourceSetBinding;
+    bool autoMapBindings;
+    bool autoMapLocations;
+    bool flattenUniformArrays;
+    bool useUnknownFormat;
+    bool hlslOffsets;
+    bool useStorageBuffer;
+    bool hlslIoMapping;
 
     typedef std::list<TCall> TGraph;
     TGraph callGraph;
@@ -384,6 +697,16 @@ protected:
     std::vector<TOffsetRange> usedAtomics;  // sets of bindings used by atomic counters
     std::vector<TXfbBuffer> xfbBuffers;     // all the data we need to track per xfb buffer
     std::unordered_set<int> usedConstantId; // specialization constant ids used
+    std::set<TString> semanticNameSet;
+
+    EShTextureSamplerTransformMode textureSamplerTransformMode;
+
+    // source code of shader, useful as part of debug information
+    std::string sourceFile;
+    std::string sourceText;
+
+    // for OpModuleProcessed, or equivalent
+    TProcesses processes;
 
 private:
     void operator=(TIntermediate&); // prevent assignments

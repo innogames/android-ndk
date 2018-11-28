@@ -3,109 +3,99 @@ Changelog
 
 Report issues to [GitHub].
 
+For Android Studio issues, follow the docs on the [Android Studio site].
+
 [GitHub]: https://github.com/android-ndk/ndk/issues
+[Android Studio site]: http://tools.android.com/filing-bugs
 
 Announcements
 -------------
 
- * `ndk-build` will default to using Clang in r13. GCC will be removed in a
-   later release.
- * `make-standalone-toolchain.sh` will be removed in r13. Make sure
-   `make_standalone_toolchain.py` suits your needs.
+ * The deprecated headers have been removed. [Unified Headers] are now simply
+   The Headers.
 
-r12b
+   For migration tips, see [Unified Headers Migration Notes].
+
+ * GCC is no longer supported. It will not be removed from the NDK just yet, but
+   is no longer receiving backports. It cannot be removed until after libc++ has
+   become stable enough to be the default, as some parts of gnustl are still
+   incompatible with Clang. It will be removed when the other STLs are removed
+   in r18.
+
+ * `libc++` is out of beta and is now the preferred STL in the NDK. Starting in
+   r17, `libc++` is the default STL for CMake and standalone toolchains. If you
+   manually selected a different STL, we strongly encourage you to move to
+   `libc++`. For more details, see [this blog post].
+
+ * Support for ARMv5 (armeabi), MIPS, and MIPS64 are deprecated. They will no
+   longer build by default with ndk-build, but are still buildable if they are
+   explicitly named, and will be included by "all", "all32", and "all64".
+   Support for each of these has been removed in r17.
+
+   Both CMake and ndk-build will issue a warning if you target any of these
+   ABIs.
+
+[Unified Headers]: docs/UnifiedHeaders.md
+[Unified Headers Migration Notes]: docs/UnifiedHeadersMigration.md
+[this blog post]: https://android-developers.googleblog.com/2017/09/introducing-android-native-development.html
+
+r16b
 ----
 
- * `ndk-gdb.py` has been fixed: https://github.com/android-ndk/ndk/issues/118
- * NdkCameraMetadataTags.h has been updated to no longer contain the invalid
-   enum value.
- * A bug in `ndk-build` that resulting in spurious warnings for static libraries
-   using libc++ has been fixed:
-   https://android-review.googlesource.com/#/c/238146/
- * The OpenSLES headers have been updated for android-24.
+ * [Issue 573]: Revert the switch to `-Oz` by default.
 
 NDK
 ---
- * Removed support for the armeabi-v7a-hard ABI. See the explanation in the
-   [documentation](docs/HardFloatAbi.md).
- * Removed all sysroots for pre-GB platform levels. We dropped support for them
-   in r11, but neglected to actually remove them.
- * Exception handling when using `c++_shared` on ARM32 now mostly works (see
-   [Known Issues](#known-issues)). The unwinder will now be linked into each
-   linked object rather than into libc++ itself.
- * Default compiler flags have been pruned:
-   https://github.com/android-ndk/ndk/issues/27.
-     * Full changes here: https://android-review.googlesource.com/#/c/207721/5.
- * Added a Python implementation of standalone toolchains:
-   `build/tools/make_standalone_toolchain.py`.
-     * Windows users: you no longer need Cygwin to use this feature.
-     * We'll be removing the bash flavor in r13, so test the new one now.
- * `-fno-limit-debug-info` has been enabled by default for Clang debug builds.
-   This should improve debugability with LLDB.
- * `--build-id` is now enabled by default.
-     * This will be shown in native crash reports so you can easily identify
-       which version of your code was running.
- * `NDK_USE_CYGPATH` should no longer cause problems with libgcc:
-   http://b.android.com/195486.
- * `-Wl,--warn-shared-textrel` and`-Wl,--fatal-warnings` are now enabled by
-   default. If you have shared text relocations, your app will not load on
-   Marshmallow or later (and have never been allowed for 64-bit apps).
- * Precompiled headers should work better:
-   https://github.com/android-ndk/ndk/issues/14 and
-   https://github.com/android-ndk/ndk/issues/16.
- * Unreachable ARM (non-thumb) STL libraries have been removed.
- * Added Vulkan support to android-24.
- * Added Choreographer API to android-24.
- * Added `libcamera2` APIs for devices with
-   `INFO_SUPPORTED_HARDWARE_LEVEL_LIMITED` or above (see [Camera
-   Characteristics]).
 
-[Camera Characteristics]: https://developer.android.com/reference/android/hardware/camera2/CameraCharacteristics.html#INFO_SUPPORTED_HARDWARE_LEVEL
+ * ndk-build and CMake now link libatomic by default. Manually adding `-latomic`
+   to your ldflags should no longer be necessary.
+ * Clang static analyzer support for ndk-build has been fixed to work with Clang
+   as a compiler. See https://github.com/android-ndk/ndk/issues/362.
+ * Clang now defaults to -Oz instead of -Os. This should reduce generated code
+   size increases compared to GCC.
+ * GCC no longer uses -Bsymbolic by default. This allows symbol preemption as
+   specified by the C++ standard and as required by ASAN. For libraries with
+   large numbers of public symbols, this may increase the size of your binaries.
+ * Updated binutils to version 2.27. This includes the fix for miscompiles for
+   aarch64: https://sourceware.org/bugzilla/show_bug.cgi?id=21491.
+ * Improved compatibility between our CMake toolchain file and newer CMake
+   versions. The NDK's CMake toolchain file now completely supercedes CMake's
+   built-in NDK support.
+ * ndk-stack now works for arm64 on Darwin.
 
-Clang
------
+libc++
+------
 
- * Clang has been updated to 3.8svn (r256229, build 2812033).
-     * Note that Clang packaged in the Windows 64-bit NDK is actually 32-bit.
- * `__thread` should work for real this time.
+ * libandroid\_support now contains only APIs needed for supporting libc++ on
+   old devices. See https://github.com/android-ndk/ndk/issues/300.
 
-GCC
----
+APIs
+----
 
- * Synchronized with the ChromeOS GCC @ `google/gcc-4_9` r227810.
- * Backported coverage sanitizer patch from ToT (r231296).
- * Fixed libatomic to not use ifuncs:
-   https://github.com/android-ndk/ndk/issues/31.
+ * Added native APIs for Android O MR1.
+     * [Neural Networks API]
+     * [JNI Shared Memory API]
 
-Binutils
---------
-
- * "Erratum 843419 found and fixed" info messages are silenced.
- * Introduced option '--long-plt' to fix internal linker error when linking huge
-   arm32 binaries.
- * Fixed wrong run time stubs for AArch64. This was causing jump addresses to be
-   calculated incorrectly for very large DSOs.
- * Introduced default option '--no-apply-dynamic' to work around a dynamic
-   linker bug for earlier Android releases.
- * NDK r11 KI for `dynamic_cast` not working with Clang, x86, `stlport_static`
-   and optimization has been fixed.
-
-GDB
----
-
- * Updated to GDB 7.11: https://www.gnu.org/software/gdb/news/.
- * Some bugfixes for `ndk-gdb.py`.
+[Neural Networks API]: https://developer.android.com/ndk/guides/neuralnetworks/index.html
+[JNI Shared Memory API]: https://developer.android.com/ndk/reference/sharedmem__jni_8h.html
 
 Known Issues
 ------------
 
  * This is not intended to be a comprehensive list of all outstanding bugs.
- * x86 ASAN still does not work. See discussion on
-   https://android-review.googlesource.com/#/c/186276/
- * Exception unwinding with `c++_shared` still does not work for ARM on
-   Gingerbread or Ice Cream Sandwich.
- * Bionic headers and libraries for Marshmallow and N are not yet exposed
-   despite the presence of android-24. Those platforms are still the Lollipop
-   headers and libraries (not a regression from r11).
- * RenderScript tools are not present (not a regression from r11):
-   https://github.com/android-ndk/ndk/issues/7.
+ * [Issue 360]: `thread_local` variables with non-trivial destructors will cause
+   segfaults if the containing library is `dlclose`ed on devices running M or
+   newer, or devices before M when using a static STL. The simple workaround is
+   to not call `dlclose`.
+ * [Issue 374]: gabi++ (and therefore stlport) binaries can segfault when built
+   for armeabi.
+ * [Issue 399]: MIPS64 must use the integrated assembler. Clang defaults to
+   using binutils rather than the integrated assembler for this target.
+   ndk-build and cmake handle this for you, but make sure to use
+   `-fintegrated-as` for MIPS64 for custom build systems.
+ * [Issue 573]: Clang miscompile when using `-Oz` and `-fexceptions`.
+
+[Issue 360]: https://github.com/android-ndk/ndk/issues/360
+[Issue 374]: https://github.com/android-ndk/ndk/issues/374
+[Issue 399]: https://github.com/android-ndk/ndk/issues/399
+[Issue 573]: https://github.com/android-ndk/ndk/issues/573

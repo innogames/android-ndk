@@ -25,35 +25,37 @@
  * OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
+
 #ifndef NDK_ANDROID_SUPPORT_STDLIB_H
 #define NDK_ANDROID_SUPPORT_STDLIB_H
 
-// __LP64__
-
 #include_next <stdlib.h>
 
-#if !defined(__LP64__)
+__BEGIN_DECLS
 
-#include <xlocale.h>
-
-#ifdef __cplusplus
-extern "C" {
+#if __ANDROID_API__ < __ANDROID_API_J__
+int posix_memalign(void** memptr, size_t alignment, size_t size);
 #endif
 
-long long   strtoll(const char*, char**, int);
-long double strtold(const char*, char**);
-void _Exit(int);
-int                  mbtowc(wchar_t *pwc, const char *pmb, size_t max);
-long                 strtol_l(const char *nptr, char **endptr, int base, locale_t loc);
-unsigned long        strtoul_l(const char *nptr, char **endptr, int base, locale_t loc);
-long long            strtoll_l(const char *nptr, char **endptr, int base, locale_t loc);
-unsigned long long   strtoull_l(const char *nptr, char **endptr, int base, locale_t loc);
-long double          strtold_l(const char *nptr, char **endptr, locale_t loc);
-
-#ifdef __cplusplus
-}  // extern "C"
+#if __ANDROID_API__ < __ANDROID_API_L__
+#undef MB_CUR_MAX
+size_t __ctype_get_mb_cur_max(void);
+#define MB_CUR_MAX __ctype_get_mb_cur_max()
+long double strtold_l(const char*, char**, locale_t);
+long long strtoll_l(const char*, char**, int, locale_t);
+unsigned long long strtoull_l(const char*, char**, int, locale_t);
+int mbtowc(wchar_t*, const char*, size_t);
+int at_quick_exit(void (*)(void));
+void quick_exit(int) __noreturn;
 #endif
 
-#endif // !__LP64__
+#if __ANDROID_API__ < __ANDROID_API_O__
+double strtod_l(const char*, char**, locale_t);
+float strtof_l(const char*, char**, locale_t);
+long strtol_l(const char*, char**, int, locale_t);
+unsigned long strtoul_l(const char*, char**, int, locale_t);
+#endif
 
-#endif  // NDK_ANDROID_SUPPORT_STDLIB_H
+__END_DECLS
+
+#endif
