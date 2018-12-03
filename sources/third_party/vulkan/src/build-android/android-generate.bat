@@ -19,43 +19,48 @@ if exist generated (
 )
 mkdir generated\include generated\common
 
-python ../vk-generate.py Android dispatch-table-ops layer > generated/include/vk_dispatch_table_helper.h
-
-python ../vk_helper.py --gen_enum_string_helper ../include/vulkan/vulkan.h --abs_out_dir generated/include
-python ../vk_helper.py --gen_struct_wrappers ../include/vulkan/vulkan.h --abs_out_dir generated/include
-
-python ../vk-layer-generate.py Android object_tracker ../include/vulkan/vulkan.h > generated/include/object_tracker.cpp
-python ../vk-layer-generate.py Android unique_objects ../include/vulkan/vulkan.h > generated/include/unique_objects.cpp
-
 cd generated/include
-python ../../../genvk.py threading -registry ../../../vk.xml thread_check.h
-python ../../../genvk.py paramchecker -registry ../../../vk.xml parameter_validation.h
+py -3 ../../../scripts/lvl_genvk.py -registry ../../../scripts/vk.xml vk_safe_struct.h
+py -3 ../../../scripts/lvl_genvk.py -registry ../../../scripts/vk.xml vk_safe_struct.cpp
+py -3 ../../../scripts/lvl_genvk.py -registry ../../../scripts/vk.xml vk_struct_size_helper.h
+py -3 ../../../scripts/lvl_genvk.py -registry ../../../scripts/vk.xml vk_struct_size_helper.c
+py -3 ../../../scripts/lvl_genvk.py -registry ../../../scripts/vk.xml vk_enum_string_helper.h
+py -3 ../../../scripts/lvl_genvk.py -registry ../../../scripts/vk.xml vk_object_types.h
+py -3 ../../../scripts/lvl_genvk.py -registry ../../../scripts/vk.xml vk_dispatch_table_helper.h
+py -3 ../../../scripts/lvl_genvk.py -registry ../../../scripts/vk.xml thread_check.h
+py -3 ../../../scripts/lvl_genvk.py -registry ../../../scripts/vk.xml parameter_validation.cpp
+py -3 ../../../scripts/lvl_genvk.py -registry ../../../scripts/vk.xml unique_objects_wrappers.h
+py -3 ../../../scripts/lvl_genvk.py -registry ../../../scripts/vk.xml vk_layer_dispatch_table.h
+py -3 ../../../scripts/lvl_genvk.py -registry ../../../scripts/vk.xml vk_extension_helper.h
+py -3 ../../../scripts/lvl_genvk.py -registry ../../../scripts/vk.xml object_tracker.cpp
+py -3 ../../../scripts/lvl_genvk.py -registry ../../../scripts/vk.xml vk_typemap_helper.h
+
+set SPIRV_TOOLS_PATH=../../third_party/shaderc/third_party/spirv-tools
+set SPIRV_TOOLS_UUID=spirv_tools_uuid.txt
+
+if exist %SPIRV_TOOLS_PATH% (
+
+  echo Found spirv-tools, using git_dir for external_revision_generator.py
+  py -3 ../../../scripts/external_revision_generator.py ^
+    --git_dir %SPIRV_TOOLS_PATH% ^
+    -s SPIRV_TOOLS_COMMIT_ID ^
+    -o spirv_tools_commit_id.h
+
+) else (
+
+  echo No spirv-tools git_dir found, generating UUID for external_revision_generator.py
+
+  REM Ensure uuidgen is installed, this should error if not found
+  uuidgen.exe -v
+
+  uuidgen.exe > %SPIRV_TOOLS_UUID%
+  type %SPIRV_TOOLS_UUID%
+  py -3 ../../../scripts/external_revision_generator.py ^
+    --rev_file %SPIRV_TOOLS_UUID% ^
+    -s SPIRV_TOOLS_COMMIT_ID ^
+    -o spirv_tools_commit_id.h
+
+)
+
 cd ../..
 
-copy /Y ..\layers\vk_layer_config.cpp   generated\common\
-copy /Y ..\layers\vk_layer_extension_utils.cpp  generated\common\
-copy /Y ..\layers\vk_layer_utils.cpp    generated\common\
-copy /Y ..\layers\vk_layer_table.cpp    generated\common\
-
-REM create build-script root directory
-mkdir generated\gradle-build
-cd generated\gradle-build
-mkdir  core_validation device_limits image object_tracker parameter_validation swapchain threading unique_objects
-cd ..\..
-mkdir generated\layer-src
-cd generated\layer-src
-mkdir  core_validation device_limits image object_tracker parameter_validation swapchain threading unique_objects
-cd ..\..
-xcopy /s gradle-templates\*   generated\gradle-build\
-for %%G in (core_validation device_limits image parameter_validation swapchain threading) Do (
-    copy ..\layers\%%G.cpp   generated\layer-src\%%G
-    echo apply from: "../win.template.gradle"  > generated\gradle-build\%%G\build.gradle
-)
-copy generated\include\object_tracker.cpp   generated\layer-src\object_tracker
-echo apply from: "../win.template.gradle"  > generated\gradle-build\object_tracker\build.gradle
-copy generated\include\unique_objects.cpp   generated\layer-src\unique_objects
-move generated\include\vk_safe_struct.cpp generated\layer-src\unique_objects\vk_safe_struct.cpp
-echo apply from: "../win.template.gradle"  > generated\gradle-build\unique_objects\build.gradle
-
-del  /f /q generated\include\object_tracker.cpp
-del  /f /q generated\include\unique_objects.cpp

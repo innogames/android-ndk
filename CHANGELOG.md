@@ -3,109 +3,116 @@ Changelog
 
 Report issues to [GitHub].
 
+For Android Studio issues, follow the docs on the [Android Studio site].
+
 [GitHub]: https://github.com/android-ndk/ndk/issues
+[Android Studio site]: http://tools.android.com/filing-bugs
 
 Announcements
 -------------
 
- * `ndk-build` will default to using Clang in r13. GCC will be removed in a
-   later release.
- * `make-standalone-toolchain.sh` will be removed in r13. Make sure
-   `make_standalone_toolchain.py` suits your needs.
+ * GCC has been removed.
 
-r12b
+ * [LLD](https://lld.llvm.org/) is now available for testing. AOSP is in the
+   process of switching to using LLD by default and the NDK will follow
+   (timeline unknown). Test LLD in your app by passing `-fuse-ld=lld` when
+   linking.
+
+ * gnustl, gabi++, and stlport have been removed.
+
+ * Support for ICS (android-14 and android-15) has been removed. Apps using
+   executables no longer need to provide both a PIE and non-PIE executable.
+
+ * The Play Store will require 64-bit support when uploading an APK beginning in
+   August 2019. Start porting now to avoid surprises when the time comes. For
+   more information, see [this blog post](https://android-developers.googleblog.com/2017/12/improving-app-security-and-performance.html).
+
+r18b
 ----
 
- * `ndk-gdb.py` has been fixed: https://github.com/android-ndk/ndk/issues/118
- * NdkCameraMetadataTags.h has been updated to no longer contain the invalid
-   enum value.
- * A bug in `ndk-build` that resulting in spurious warnings for static libraries
-   using libc++ has been fixed:
-   https://android-review.googlesource.com/#/c/238146/
- * The OpenSLES headers have been updated for android-24.
+ * [Issue 799]: Fixed build performance regression in ndk-build caused by
+   compile_commands.json logic.
+ * [Issue 803]: The "GCC" scripts in standalone toolchains now point to the
+   correct Clang.
+ * [Issue 805]: The "GCC" wrappers for Clang now use `-gcc-toolchain`.
+ * [Issue 815]: ndk-build now builds with `-fstack-protector-strong` again.
 
-NDK
----
- * Removed support for the armeabi-v7a-hard ABI. See the explanation in the
-   [documentation](docs/HardFloatAbi.md).
- * Removed all sysroots for pre-GB platform levels. We dropped support for them
-   in r11, but neglected to actually remove them.
- * Exception handling when using `c++_shared` on ARM32 now mostly works (see
-   [Known Issues](#known-issues)). The unwinder will now be linked into each
-   linked object rather than into libc++ itself.
- * Default compiler flags have been pruned:
-   https://github.com/android-ndk/ndk/issues/27.
-     * Full changes here: https://android-review.googlesource.com/#/c/207721/5.
- * Added a Python implementation of standalone toolchains:
-   `build/tools/make_standalone_toolchain.py`.
-     * Windows users: you no longer need Cygwin to use this feature.
-     * We'll be removing the bash flavor in r13, so test the new one now.
- * `-fno-limit-debug-info` has been enabled by default for Clang debug builds.
-   This should improve debugability with LLDB.
- * `--build-id` is now enabled by default.
-     * This will be shown in native crash reports so you can easily identify
-       which version of your code was running.
- * `NDK_USE_CYGPATH` should no longer cause problems with libgcc:
-   http://b.android.com/195486.
- * `-Wl,--warn-shared-textrel` and`-Wl,--fatal-warnings` are now enabled by
-   default. If you have shared text relocations, your app will not load on
-   Marshmallow or later (and have never been allowed for 64-bit apps).
- * Precompiled headers should work better:
-   https://github.com/android-ndk/ndk/issues/14 and
-   https://github.com/android-ndk/ndk/issues/16.
- * Unreachable ARM (non-thumb) STL libraries have been removed.
- * Added Vulkan support to android-24.
- * Added Choreographer API to android-24.
- * Added `libcamera2` APIs for devices with
-   `INFO_SUPPORTED_HARDWARE_LEVEL_LIMITED` or above (see [Camera
-   Characteristics]).
+[Issue 799]: https://github.com/android-ndk/ndk/issues/799
+[Issue 803]: https://github.com/android-ndk/ndk/issues/803
+[Issue 805]: https://github.com/android-ndk/ndk/issues/805
+[Issue 815]: https://github.com/android-ndk/ndk/issues/805
 
-[Camera Characteristics]: https://developer.android.com/reference/android/hardware/camera2/CameraCharacteristics.html#INFO_SUPPORTED_HARDWARE_LEVEL
+Changes
+-------
 
-Clang
------
+ * Updated Clang to build 4751641, based on r328903.
+     * With [Issue 573] fixed, -Oz is now the default optimization mode for
+       thumb.
+ * Updated libc++ to revision r334917.
+ * Added support for clang-tidy to ndk-build.
+     * Enable application-wide with `APP_CLANG_TIDY := true`, or per-module with
+       `LOCAL_CLANG_TIDY := true`.
+     * Pass specific clang-tidy flags such as `-checks` with
+       `APP_CLANG_TIDY_FLAGS` or `LOCAL_CLANG_TIDY_FLAGS`.
+     * As usual, module settings override application settings.
+     * By default no flags are passed to clang-tidy, so only the checks enabled
+       by default in clang-tidy will be enabled. View the default list with
+       `clang-tidy -list-checks`.
+     * By default clang-tidy warnings are not errors. This behavior can be
+       changed with `-warnings-as-errors=*`.
+ * ndk-build can now generate a [JSON Compilation Database].
+     * Generate with either `ndk-build compile_commands.json` (does not build)
+       or `ndk-build GEN_COMPILE_COMMANDS_DB=true` (builds and generates
+       database).
+ * [Issue 490]: ndk-build and CMake now default to using NEON for ARM when
+   targeting android-23 (Marshmallow) or newer.
+     * If your minSdkVersion is below 23 or if you were already enabling NEON
+       manually, this change does not affect you.
+     * CPUs that do not support this feature are uncommon and new devices were
+       not allowed to ship without it beginning in Marshmallow, but older
+       devices that did not support NEON may have been upgraded to Marshmallow.
+     * If you need to continue supporting these devices and have a minSdkVersion
+       of 23 or higher, you can disable NEON explicitly by setting
+       `LOCAL_ARM_NEON := false` in ndk-build or passing
+       `-DANDROID_ARM_NEON=false` to CMake.
+     * Alternatively, use the Play Console to [blacklist CPUs] without NEON to
+       disallow your app from being installed on those devices.
+ * Added `APP_STRIP_MODE` and `LOCAL_STRIP_MODE` to ndk-build.
+     * Allows the user to specify the strip mode used for their modules.
+     * The option is passed directly to the strip command. See the [strip
+       documentation](https://sourceware.org/binutils/docs/binutils/strip.html)
+       for details.
+     * If set to "none", strip will not be run.
+     * Defaults to "--strip-unneeded". This is the same behavior as previous
+       NDKs.
+     * `LOCAL_STRIP_MODE` always overrides `APP_STRIP_MODE` when set.
+ * [Issue 749]: The libc++_shared.so in the NDK is no longer stripped of debug
+   info. Debugging libc++ is now possible. Gradle will still strip the library
+   before packaging it in an APK.
 
- * Clang has been updated to 3.8svn (r256229, build 2812033).
-     * Note that Clang packaged in the Windows 64-bit NDK is actually 32-bit.
- * `__thread` should work for real this time.
-
-GCC
----
-
- * Synchronized with the ChromeOS GCC @ `google/gcc-4_9` r227810.
- * Backported coverage sanitizer patch from ToT (r231296).
- * Fixed libatomic to not use ifuncs:
-   https://github.com/android-ndk/ndk/issues/31.
-
-Binutils
---------
-
- * "Erratum 843419 found and fixed" info messages are silenced.
- * Introduced option '--long-plt' to fix internal linker error when linking huge
-   arm32 binaries.
- * Fixed wrong run time stubs for AArch64. This was causing jump addresses to be
-   calculated incorrectly for very large DSOs.
- * Introduced default option '--no-apply-dynamic' to work around a dynamic
-   linker bug for earlier Android releases.
- * NDK r11 KI for `dynamic_cast` not working with Clang, x86, `stlport_static`
-   and optimization has been fixed.
-
-GDB
----
-
- * Updated to GDB 7.11: https://www.gnu.org/software/gdb/news/.
- * Some bugfixes for `ndk-gdb.py`.
+[Issue 490]: https://github.com/android-ndk/ndk/issues/490
+[Issue 573]: https://github.com/android-ndk/ndk/issues/573
+[Issue 749]: https://github.com/android-ndk/ndk/issues/749
+[blacklist CPUs]: https://support.google.com/googleplay/android-developer/answer/7353455?hl=en
+[clang-tidy]: http://clang.llvm.org/extra/clang-tidy/
+[JSON Compilation Database]: https://clang.llvm.org/docs/JSONCompilationDatabase.html
 
 Known Issues
 ------------
 
  * This is not intended to be a comprehensive list of all outstanding bugs.
- * x86 ASAN still does not work. See discussion on
-   https://android-review.googlesource.com/#/c/186276/
- * Exception unwinding with `c++_shared` still does not work for ARM on
-   Gingerbread or Ice Cream Sandwich.
- * Bionic headers and libraries for Marshmallow and N are not yet exposed
-   despite the presence of android-24. Those platforms are still the Lollipop
-   headers and libraries (not a regression from r11).
- * RenderScript tools are not present (not a regression from r11):
-   https://github.com/android-ndk/ndk/issues/7.
+ * [Issue 360]: `thread_local` variables with non-trivial destructors will cause
+   segfaults if the containing library is `dlclose`ed on devices running M or
+   newer, or devices before M when using a static STL. The simple workaround is
+   to not call `dlclose`.
+ * [Issue 70838247]: Gold emits broken debug information for AArch64. AArch64
+   still uses BFD by default.
+ * This version of the NDK is incompatible with the Android Gradle plugin
+   version 3.0 or older. If you see an error like
+   `No toolchains found in the NDK toolchains folder for ABI with prefix: mips64el-linux-android`,
+   update your project file to [use plugin version 3.1 or newer]. You will also
+   need to upgrade to Android Studio 3.1 or newer.
+
+[Issue 360]: https://github.com/android-ndk/ndk/issues/360
+[Issue 70838247]: https://issuetracker.google.com/70838247
+[use plugin version 3.1 or newer]: https://developer.android.com/studio/releases/gradle-plugin#updating-plugin

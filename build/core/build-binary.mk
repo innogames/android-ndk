@@ -17,11 +17,23 @@
 $(call assert-defined,LOCAL_MODULE)
 $(call module-restore-locals,$(LOCAL_MODULE))
 
+# As in build-module.mk, eval sucks. Manually unstash the flags variations to
+# preserve -Werror=#warnings.
+LOCAL_ASFLAGS := $(__ndk_modules.$(LOCAL_MODULE).ASFLAGS)
+LOCAL_ASMFLAGS := $(__ndk_modules.$(LOCAL_MODULE).ASMFLAGS)
+LOCAL_CFLAGS := $(__ndk_modules.$(LOCAL_MODULE).CFLAGS)
+LOCAL_CLANG_TIDY_FLAGS := $(__ndk_modules.$(LOCAL_MODULE).CLANG_TIDY_FLAGS)
+LOCAL_CONLYFLAGS := $(__ndk_modules.$(LOCAL_MODULE).CONLYFLAGS)
+LOCAL_CPPFLAGS := $(__ndk_modules.$(LOCAL_MODULE).CPPFLAGS)
+LOCAL_CXXFLAGS := $(__ndk_modules.$(LOCAL_MODULE).CXXFLAGS)
+LOCAL_LDFLAGS := $(__ndk_modules.$(LOCAL_MODULE).LDFLAGS)
+LOCAL_RENDERSCRIPT_FLAGS := $(__ndk_modules.$(LOCAL_MODULE).RENDERSCRIPT_FLAGS)
+
 # For now, only support target (device-specific modules).
 # We may want to introduce support for host modules in the future
 # but that is too experimental for now.
 #
-my := TARGET_
+my := POISONED
 
 # LOCAL_MAKEFILE must also exist and name the Android.mk that
 # included the module build script.
@@ -59,24 +71,25 @@ libs_in_ldflags := \
 # Remove the system libraries we know about from the warning, it's ok
 # (and actually expected) to link them with -l<name>.
 system_libs := \
-    android \
-    c \
-    dl \
-    jnigraphics \
-    log \
-    m \
-    m_hard \
-    stdc++ \
-    z \
     EGL \
     GLESv1_CM \
     GLESv2 \
     GLESv3 \
-    vulkan \
-    OpenSLES \
     OpenMAXAL \
+    OpenSLES \
+    aaudio \
+    android \
+    atomic \
+    c \
+    camera2ndk \
+    dl \
+    jnigraphics \
+    log \
+    m \
     mediandk \
-    atomic
+    stdc++ \
+    vulkan \
+    z \
 
 libs_in_ldflags := $(filter-out $(addprefix -l,$(system_libs)), $(libs_in_ldflags))
 
@@ -121,9 +134,9 @@ $(cleantarget): PRIVATE_ABI         := $(TARGET_ARCH_ABI)
 $(cleantarget): PRIVATE_MODULE      := $(LOCAL_MODULE)
 ifneq ($(LOCAL_BUILT_MODULE_NOT_COPIED),true)
 $(cleantarget): PRIVATE_CLEAN_FILES := $(LOCAL_BUILT_MODULE) \
-                                       $($(my)OBJS)
+                                       $(LOCAL_OBJS_DIR)
 else
-$(cleantarget): PRIVATE_CLEAN_FILES := $($(my)OBJS)
+$(cleantarget): PRIVATE_CLEAN_FILES := $(LOCAL_OBJS_DIR)
 endif
 $(cleantarget)::
 	$(call host-echo-build-step,$(PRIVATE_ABI),Clean) "$(PRIVATE_MODULE) [$(PRIVATE_ABI)]"
@@ -169,32 +182,38 @@ LOCAL_RS_EXTENSION := $(default-rs-extensions)
 
 LOCAL_LDFLAGS += -Wl,--build-id
 
+ifeq ($(NDK_TOOLCHAIN_VERSION),clang)
+    ifeq ($(filter system stlport_shared stlport_static,$(NDK_APP_STL)),)
+        LOCAL_LDFLAGS += -nostdlib++
+    endif
+endif
+
 #
 # If LOCAL_ALLOW_UNDEFINED_SYMBOLS is not true, the linker will allow the generation
 # of a binary that uses undefined symbols.
 #
 ifneq ($(LOCAL_ALLOW_UNDEFINED_SYMBOLS),true)
-  LOCAL_LDFLAGS += $($(my)NO_UNDEFINED_LDFLAGS)
+  LOCAL_LDFLAGS += $(TARGET_NO_UNDEFINED_LDFLAGS)
 endif
 
 # Toolchain by default disallows generated code running from the heap and stack.
 # If LOCAL_DISABLE_NO_EXECUTE is true, we allow that
 #
 ifeq ($(LOCAL_DISABLE_NO_EXECUTE),true)
-  LOCAL_CFLAGS += $($(my)DISABLE_NO_EXECUTE_CFLAGS)
-  LOCAL_LDFLAGS += $($(my)DISABLE_NO_EXECUTE_LDFLAGS)
+  LOCAL_CFLAGS += $(TARGET_DISABLE_NO_EXECUTE_CFLAGS)
+  LOCAL_LDFLAGS += $(TARGET_DISABLE_NO_EXECUTE_LDFLAGS)
 else
-  LOCAL_CFLAGS += $($(my)NO_EXECUTE_CFLAGS)
-  LOCAL_LDFLAGS += $($(my)NO_EXECUTE_LDFLAGS)
+  LOCAL_CFLAGS += $(TARGET_NO_EXECUTE_CFLAGS)
+  LOCAL_LDFLAGS += $(TARGET_NO_EXECUTE_LDFLAGS)
 endif
 
 # Toolchain by default provides relro and GOT protections.
 # If LOCAL_DISABLE_RELRO is true, we disable the protections.
 #
 ifeq ($(LOCAL_DISABLE_RELRO),true)
-  LOCAL_LDFLAGS += $($(my)DISABLE_RELRO_LDFLAGS)
+  LOCAL_LDFLAGS += $(TARGET_DISABLE_RELRO_LDFLAGS)
 else
-  LOCAL_LDFLAGS += $($(my)RELRO_LDFLAGS)
+  LOCAL_LDFLAGS += $(TARGET_RELRO_LDFLAGS)
 endif
 
 # We enable shared text relocation warnings by default. These are not allowed in
@@ -211,19 +230,43 @@ endif
 # By default, we protect against format string vulnerabilities
 # If LOCAL_DISABLE_FORMAT_STRING_CHECKS is true, we disable the protections.
 ifeq ($(LOCAL_DISABLE_FORMAT_STRING_CHECKS),true)
-  LOCAL_CFLAGS += $($(my)DISABLE_FORMAT_STRING_CFLAGS)
+  LOCAL_CFLAGS += $(TARGET_DISABLE_FORMAT_STRING_CFLAGS)
 else
-  LOCAL_CFLAGS += $($(my)FORMAT_STRING_CFLAGS)
+  LOCAL_CFLAGS += $(TARGET_FORMAT_STRING_CFLAGS)
 endif
 
-# enable PIE for executable beyond certain API level, unless "-static"
-ifneq (,$(filter true,$(NDK_APP_PIE) $(TARGET_PIE)))
-  ifeq ($(call module-get-class,$(LOCAL_MODULE)),EXECUTABLE)
+# Enable PIE for dynamic executables.
+ifeq ($(call module-get-class,$(LOCAL_MODULE)),EXECUTABLE)
     ifeq (,$(filter -static,$(TARGET_LDFLAGS) $(LOCAL_LDFLAGS) $(NDK_APP_LDFLAGS)))
-      LOCAL_CFLAGS += -fPIE
-      LOCAL_LDFLAGS += -fPIE -pie
+        # x86 and x86_64 use large model pic, whereas everything else uses small
+        # model. In the past we've always used -fPIE, but the LLVMgold plugin
+        # (for LTO) complains if the models are mismatched.
+        ifneq (,$(filter x86 x86_64,$(TARGET_ARCH_ABI)))
+            LOCAL_CFLAGS += -fPIE
+            LOCAL_LDFLAGS += -fPIE -pie
+        else
+            LOCAL_CFLAGS += -fpie
+            LOCAL_LDFLAGS += -fpie -pie
+        endif
     endif
-  endif
+endif
+
+# http://b.android.com/222239
+# http://b.android.com/220159 (internal http://b/31809417)
+# x86 devices have stack alignment issues.
+ifeq ($(TARGET_ARCH_ABI),x86)
+    ifneq (,$(call lt,$(APP_PLATFORM_LEVEL),24))
+        LOCAL_CFLAGS += -mstackrealign
+    endif
+endif
+
+# https://github.com/android-ndk/ndk/issues/297
+ifeq ($(TARGET_ARCH_ABI),x86)
+    ifneq (,$(call lt,$(APP_PLATFORM_LEVEL),17))
+        ifeq ($(NDK_TOOLCHAIN_VERSION),4.9)
+            LOCAL_CFLAGS += -mstack-protector-guard=global
+        endif
+    endif
 endif
 
 #
@@ -279,7 +322,10 @@ ifdef LOCAL_ARM_NEON
     $(call __ndk_info,LOCAL_ARM_NEON must be defined either to 'true' or 'false' in $(LOCAL_MAKEFILE), not '$(LOCAL_ARM_NEON)')\
     $(call __ndk_error,Aborting) \
   )
+else ifeq ($(true),$(call gte,$(TARGET_PLATFORM_LEVEL),23))
+  LOCAL_ARM_NEON := true
 endif
+
 ifeq ($(LOCAL_ARM_NEON),true)
   neon_sources += $(LOCAL_SRC_FILES:%.neon=%)
   # tag the precompiled header with 'neon' tag if it exists
@@ -397,28 +443,19 @@ ifneq (,$(call module-has-c++-features,$(LOCAL_MODULE),exceptions))
     LOCAL_CPPFLAGS += -fexceptions
 endif
 
-# If we're using the 'system' STL and use rtti or exceptions, then
-# automatically link against the GNU libsupc++ for now.
-#
-ifneq (,$(call module-has-c++-features,$(LOCAL_MODULE),rtti exceptions))
-    ifeq (system,$(NDK_APP_STL))
-      LOCAL_LDLIBS := $(LOCAL_LDLIBS) $(call host-path,$(NDK_ROOT)/sources/cxx-stl/gnu-libstdc++/4.9/libs/$(TARGET_ARCH_ABI)/libsupc++$(TARGET_LIB_EXTENSION))
-    endif
-endif
-
 # Set include patch for renderscript
-
-
 ifneq ($(LOCAL_RENDERSCRIPT_INCLUDES_OVERRIDE),)
     LOCAL_RENDERSCRIPT_INCLUDES := $(LOCAL_RENDERSCRIPT_INCLUDES_OVERRIDE)
 else
     LOCAL_RENDERSCRIPT_INCLUDES := \
+        $(RENDERSCRIPT_PLATFORM_HEADER)/scriptc \
         $(RENDERSCRIPT_TOOLCHAIN_HEADER) \
         $(LOCAL_RENDERSCRIPT_INCLUDES)
 endif
 
+# Only enable the compatibility path when LOCAL_RENDERSCRIPT_COMPATIBILITY is defined.
 RS_COMPAT :=
-ifneq ($(call module-is-shared-library,$(LOCAL_MODULE)),)
+ifeq ($(LOCAL_RENDERSCRIPT_COMPATIBILITY),true)
     RS_COMPAT := true
 endif
 
@@ -486,6 +523,26 @@ endif
 # Build the sources to object files
 #
 
+# Include RenderScript headers if rs files are found.
+ifneq ($(filter $(all_rs_patterns),$(LOCAL_SRC_FILES)),)
+    LOCAL_C_INCLUDES += \
+        $(RENDERSCRIPT_PLATFORM_HEADER) \
+        $(RENDERSCRIPT_PLATFORM_HEADER)/cpp \
+        $(TARGET_OBJS)/$(LOCAL_MODULE)
+endif
+
+do_tidy := $(NDK_APP_CLANG_TIDY)
+ifdef LOCAL_CLANG_TIDY
+    do_tidy := $(LOCAL_CLANG_TIDY)
+endif
+
+ifeq ($(do_tidy),true)
+    $(foreach src,$(filter %.c,$(LOCAL_SRC_FILES)),\
+        $(call clang-tidy-c,$(src),$(call get-object-name,$(src))))
+    $(foreach src,$(filter $(all_cpp_patterns),$(LOCAL_SRC_FILES)),\
+        $(call clang-tidy-cpp,$(src),$(call get-object-name,$(src))))
+endif
+
 $(foreach src,$(filter %.c,$(LOCAL_SRC_FILES)), $(call compile-c-source,$(src),$(call get-object-name,$(src))))
 $(foreach src,$(filter %.S %.s,$(LOCAL_SRC_FILES)), $(call compile-s-source,$(src),$(call get-object-name,$(src))))
 $(foreach src,$(filter $(all_cpp_patterns),$(LOCAL_SRC_FILES)),\
@@ -542,6 +599,7 @@ $(call generate-file-dir,$(LOCAL_BUILT_MODULE))
 
 $(LOCAL_BUILT_MODULE): PRIVATE_OBJECTS := $(LOCAL_OBJECTS)
 $(LOCAL_BUILT_MODULE): PRIVATE_LIBGCC := $(TARGET_LIBGCC)
+$(LOCAL_BUILT_MODULE): PRIVATE_LIBATOMIC := $(TARGET_LIBATOMIC)
 
 $(LOCAL_BUILT_MODULE): PRIVATE_LD := $(TARGET_LD)
 $(LOCAL_BUILT_MODULE): PRIVATE_LDFLAGS := $(my_ldflags)
@@ -574,7 +632,8 @@ ar_objects := $(call host-path,$(LOCAL_OBJECTS))
 ifeq ($(LOCAL_SHORT_COMMANDS),true)
     $(call ndk_log,Building static library module '$(LOCAL_MODULE)' with linker list file)
     ar_list_file := $(LOCAL_OBJS_DIR)/archiver.list
-    $(call generate-list-file,$(ar_objects),$(ar_list_file))
+    $(call generate-list-file,\
+        $(call escape-backslashes,$(ar_objects)),$(ar_list_file))
     ar_objects   := @$(call host-path,$(ar_list_file))
     $(LOCAL_BUILT_MODULE): $(ar_list_file)
 endif
@@ -587,7 +646,7 @@ ifeq (true,$(thin_archive))
 endif
 
 $(LOCAL_BUILT_MODULE): PRIVATE_ABI := $(TARGET_ARCH_ABI)
-$(LOCAL_BUILT_MODULE): PRIVATE_AR := $(TARGET_AR) $(ar_flags)
+$(LOCAL_BUILT_MODULE): PRIVATE_AR := $(TARGET_AR) $(ar_flags) $(TARGET_AR_FLAGS)
 $(LOCAL_BUILT_MODULE): PRIVATE_AR_OBJECTS := $(ar_objects)
 $(LOCAL_BUILT_MODULE): PRIVATE_BUILD_STATIC_LIB := $(cmd-build-static-library)
 
@@ -641,6 +700,26 @@ shared_libs := $(call module-filter-shared-libraries,$(all_libs))
 static_libs := $(call module-filter-static-libraries,$(all_libs))
 whole_static_libs := $(call module-extract-whole-static-libs,$(LOCAL_MODULE),$(static_libs))
 static_libs := $(filter-out $(whole_static_libs),$(static_libs))
+all_defined_libs := $(shared_libs) $(static_libs) $(whole_static_libs)
+undefined_libs := $(filter-out $(all_defined_libs),$(all_libs))
+
+ifdef undefined_libs
+    $(call __ndk_warning,Module $(LOCAL_MODULE) depends on undefined modules: $(undefined_libs))
+
+    # https://github.com/android-ndk/ndk/issues/208
+    # ndk-build didn't used to fail the build for a missing dependency. This
+    # seems to have always been the behavior, so there's a good chance that
+    # there are builds out there that depend on this behavior (as of right now,
+    # anything using libc++ on ARM has this problem because of libunwind).
+    #
+    # By default we will abort in this situation because this is so completely
+    # broken. A user may define APP_ALLOW_MISSING_DEPS to "true" in their
+    # Application.mk or on the command line to revert to the old, broken
+    # behavior.
+    ifneq ($(APP_ALLOW_MISSING_DEPS),true)
+        $(call __ndk_error,Aborting (set APP_ALLOW_MISSING_DEPS=true to allow missing dependencies))
+    endif
+endif
 
 $(call -ndk-mod-debug,module $(LOCAL_MODULE) [$(LOCAL_BUILT_MODULE)])
 $(call -ndk-mod-debug,.  all_libs='$(all_libs)')
@@ -719,6 +798,12 @@ $(LOCAL_BUILT_MODULE): $(LOCAL_OBJECTS)
 	$(hide) $(call host-cp,$<,$@)
 endif
 
+ifeq ($(LOCAL_STRIP_MODE),)
+    NDK_STRIP_MODE := $(NDK_APP_STRIP_MODE)
+else
+    NDK_STRIP_MODE := $(LOCAL_STRIP_MODE)
+endif
+
 #
 # If this is an installable module
 #
@@ -729,6 +814,7 @@ $(LOCAL_INSTALLED): PRIVATE_SRC         := $(LOCAL_BUILT_MODULE)
 $(LOCAL_INSTALLED): PRIVATE_DST_DIR     := $(NDK_APP_DST_DIR)
 $(LOCAL_INSTALLED): PRIVATE_DST         := $(LOCAL_INSTALLED)
 $(LOCAL_INSTALLED): PRIVATE_STRIP       := $(TARGET_STRIP)
+$(LOCAL_INSTALLED): PRIVATE_STRIP_MODE  := $(NDK_STRIP_MODE)
 $(LOCAL_INSTALLED): PRIVATE_STRIP_CMD   := $(call cmd-strip, $(PRIVATE_DST))
 $(LOCAL_INSTALLED): PRIVATE_OBJCOPY     := $(TARGET_OBJCOPY)
 $(LOCAL_INSTALLED): PRIVATE_OBJCOPY_CMD := $(call cmd-add-gnu-debuglink, $(PRIVATE_DST), $(PRIVATE_SRC))
@@ -736,7 +822,7 @@ $(LOCAL_INSTALLED): PRIVATE_OBJCOPY_CMD := $(call cmd-add-gnu-debuglink, $(PRIVA
 $(LOCAL_INSTALLED): $(LOCAL_BUILT_MODULE) clean-installed-binaries
 	$(call host-echo-build-step,$(PRIVATE_ABI),Install) "$(PRIVATE_NAME) => $(call pretty-dir,$(PRIVATE_DST))"
 	$(hide) $(call host-install,$(PRIVATE_SRC),$(PRIVATE_DST))
-	$(hide) $(PRIVATE_STRIP_CMD)
+	$(if $(filter none,$(PRIVATE_STRIP_MODE)),,$(hide) $(PRIVATE_STRIP_CMD))
 
 #$(hide) $(PRIVATE_OBJCOPY_CMD)
 

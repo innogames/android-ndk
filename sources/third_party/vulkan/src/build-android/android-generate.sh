@@ -21,48 +21,55 @@ cd $dir
 rm -rf generated
 mkdir -p generated/include generated/common
 
-python ../vk-generate.py Android dispatch-table-ops layer > generated/include/vk_dispatch_table_helper.h
+( cd generated/include; python3 ../../../scripts/lvl_genvk.py -registry ../../../scripts/vk.xml vk_safe_struct.h )
+( cd generated/include; python3 ../../../scripts/lvl_genvk.py -registry ../../../scripts/vk.xml vk_safe_struct.cpp )
+( cd generated/include; python3 ../../../scripts/lvl_genvk.py -registry ../../../scripts/vk.xml vk_struct_size_helper.h )
+( cd generated/include; python3 ../../../scripts/lvl_genvk.py -registry ../../../scripts/vk.xml vk_struct_size_helper.c )
+( cd generated/include; python3 ../../../scripts/lvl_genvk.py -registry ../../../scripts/vk.xml vk_enum_string_helper.h )
+( cd generated/include; python3 ../../../scripts/lvl_genvk.py -registry ../../../scripts/vk.xml vk_object_types.h )
+( cd generated/include; python3 ../../../scripts/lvl_genvk.py -registry ../../../scripts/vk.xml vk_dispatch_table_helper.h )
+( cd generated/include; python3 ../../../scripts/lvl_genvk.py -registry ../../../scripts/vk.xml thread_check.h )
+( cd generated/include; python3 ../../../scripts/lvl_genvk.py -registry ../../../scripts/vk.xml parameter_validation.cpp )
+( cd generated/include; python3 ../../../scripts/lvl_genvk.py -registry ../../../scripts/vk.xml unique_objects_wrappers.h )
+( cd generated/include; python3 ../../../scripts/lvl_genvk.py -registry ../../../scripts/vk.xml vk_loader_extensions.h )
+( cd generated/include; python3 ../../../scripts/lvl_genvk.py -registry ../../../scripts/vk.xml vk_loader_extensions.c )
+( cd generated/include; python3 ../../../scripts/lvl_genvk.py -registry ../../../scripts/vk.xml vk_layer_dispatch_table.h )
+( cd generated/include; python3 ../../../scripts/lvl_genvk.py -registry ../../../scripts/vk.xml vk_extension_helper.h )
+( cd generated/include; python3 ../../../scripts/lvl_genvk.py -registry ../../../scripts/vk.xml object_tracker.cpp )
+( cd generated/include; python3 ../../../scripts/lvl_genvk.py -registry ../../../scripts/vk.xml vk_typemap_helper.h )
 
-python ../vk_helper.py --gen_enum_string_helper ../include/vulkan/vulkan.h --abs_out_dir generated/include
-python ../vk_helper.py --gen_struct_wrappers ../include/vulkan/vulkan.h --abs_out_dir generated/include
+SPIRV_TOOLS_PATH=../../third_party/shaderc/third_party/spirv-tools
+SPIRV_TOOLS_UUID=spirv_tools_uuid.txt
 
-python ../vk-layer-generate.py Android object_tracker ../include/vulkan/vulkan.h > generated/include/object_tracker.cpp
-python ../vk-layer-generate.py Android unique_objects ../include/vulkan/vulkan.h > generated/include/unique_objects.cpp
-( cd generated/include; python ../../../genvk.py threading -registry ../../../vk.xml thread_check.h )
-( cd generated/include; python ../../../genvk.py paramchecker -registry ../../../vk.xml parameter_validation.h )
+set -e
 
-cp -f ../layers/vk_layer_config.cpp   generated/common/
-cp -f ../layers/vk_layer_extension_utils.cpp  generated/common/
-cp -f ../layers/vk_layer_utils.cpp    generated/common/
-cp -f ../layers/vk_layer_table.cpp    generated/common/
+( cd generated/include;
 
-# layer names and their original source files directory
-# 1 to 1 correspondence -- one layer one source file; additional files are copied
-# at fixup step
-declare layers=(core_validation device_limits image object_tracker parameter_validation swapchain threading unique_objects)
-declare src_dirs=(../layers ../layers ../layers generated/include ../layers ../layers ../layers generated/include)
+  if [[ -d $SPIRV_TOOLS_PATH ]]; then
 
-SRC_ROOT=generated/layer-src
-BUILD_ROOT=generated/gradle-build
+    echo Found spirv-tools, using git_dir for external_revision_generator.py
 
-# create build-script root directory
-cp -fr gradle-templates   generated/gradle-build
-for ((i = 0; i < ${#layers[@]}; i++))
-do
-#   copy the sources
-    mkdir  -p ${SRC_ROOT}/${layers[i]}
-    cp -f ${src_dirs[i]}/${layers[i]}.cpp  ${SRC_ROOT}/${layers[i]}/
+    python3 ../../../scripts/external_revision_generator.py \
+      --git_dir $SPIRV_TOOLS_PATH \
+      -s SPIRV_TOOLS_COMMIT_ID \
+      -o spirv_tools_commit_id.h
 
-#   copy build scripts
-    mkdir -p ${BUILD_ROOT}/${layers[i]}
-    echo "apply from: \"../common.gradle\"" > ${BUILD_ROOT}/${layers[i]}/build.gradle
-done
+  else
 
-# fixup - unique_objects need one more file
-mv  generated/include/vk_safe_struct.cpp ${SRC_ROOT}/unique_objects/vk_safe_struct.cpp
+    echo No spirv-tools git_dir found, generating UUID for external_revision_generator.py
 
-# fixup - remove copied files from generated/include
-rm  generated/include/object_tracker.cpp
-rm  generated/include/unique_objects.cpp
+    # Ensure uuidgen is installed, this should error if not found
+    type uuidgen
+
+    uuidgen > $SPIRV_TOOLS_UUID;
+    cat $SPIRV_TOOLS_UUID;
+    python3 ../../../scripts/external_revision_generator.py \
+      --rev_file $SPIRV_TOOLS_UUID \
+      -s SPIRV_TOOLS_COMMIT_ID \
+      -o spirv_tools_commit_id.h
+
+  fi
+)
+
 
 exit 0

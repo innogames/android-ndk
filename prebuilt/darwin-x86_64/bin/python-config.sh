@@ -31,7 +31,7 @@ installed_prefix ()
     echo $RESULT
 }
 
-prefix_build="/Volumes/Android/buildbot/src/android/ndk-r12-release/out/build/buildhost/darwin-x86_64/install/host-tools"
+prefix_build="/Volumes/Android/buildbot/src/android/ndk-release-r18/out/python/darwin-x86_64/install/host-tools"
 prefix_real=$(installed_prefix "$0")
 
 exec_prefix_build="${prefix}"
